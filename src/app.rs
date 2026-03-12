@@ -396,14 +396,15 @@ impl ApplicationHandler for App {
 
                 let adapter = self.wgpu_adapter.as_ref().unwrap();
 
-                // Initialize ImGui renderer
+                // Initialize ImGui renderer with correct scale factor
+                let scale_factor = window.scale_factor();
                 match pollster::block_on(ImGuiRenderer::new(
                     instance,
                     adapter,
                     device,
                     queue,
                     window,
-                    1.0,
+                    scale_factor,
                 )) {
                     Ok(mut renderer) => {
                         match ControlGui::new(Arc::clone(&self.shared_state)) {
@@ -513,12 +514,25 @@ impl ApplicationHandler for App {
                             renderer.resize(size.width, size.height);
                         }
                     }
+                    WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                        if let Some(ref mut renderer) = self.imgui_renderer {
+                            renderer.set_scale_factor(scale_factor);
+                            // Update display size with new scale
+                            let window_size = control_window.inner_size();
+                            let logical_width = window_size.width as f32 / scale_factor as f32;
+                            let logical_height = window_size.height as f32 / scale_factor as f32;
+                            renderer.set_display_size(logical_width, logical_height);
+                        }
+                    }
                     WindowEvent::RedrawRequested => {
                         if let (Some(ref mut renderer), Some(ref mut gui)) =
                             (self.imgui_renderer.as_mut(), self.control_gui.as_mut())
                         {
+                            let scale_factor = control_window.scale_factor();
                             let window_size = control_window.inner_size();
-                            renderer.set_display_size(window_size.width as f32, window_size.height as f32);
+                            let logical_width = window_size.width as f32 / scale_factor as f32;
+                            let logical_height = window_size.height as f32 / scale_factor as f32;
+                            renderer.set_display_size(logical_width, logical_height);
 
                             if let Err(err) = renderer.render_frame(|ui| gui.build_ui(ui)) {
                                 log::error!("ImGui render error: {}", err);

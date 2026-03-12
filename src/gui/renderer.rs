@@ -17,6 +17,7 @@ pub struct ImGuiRenderer {
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     preview_texture_ids: Vec<imgui::TextureId>,
+    scale_factor: f64,
 }
 
 impl ImGuiRenderer {
@@ -62,8 +63,10 @@ impl ImGuiRenderer {
         let mut platform = imgui_winit_support::WinitPlatform::init(&mut context);
         platform.attach_window(context.io_mut(), &window, imgui_winit_support::HiDpiMode::Rounded);
 
-        // Set display size and scale
-        context.io_mut().display_size = [size.width as f32, size.height as f32];
+        // Set display size (in logical points, not physical pixels) and scale
+        let logical_width = size.width as f32 / scale_factor as f32;
+        let logical_height = size.height as f32 / scale_factor as f32;
+        context.io_mut().display_size = [logical_width, logical_height];
         context.io_mut().display_framebuffer_scale = [scale_factor as f32, scale_factor as f32];
 
         // Style configuration
@@ -90,6 +93,7 @@ impl ImGuiRenderer {
             surface,
             surface_config,
             preview_texture_ids: Vec::new(),
+            scale_factor,
         })
     }
 
@@ -98,9 +102,21 @@ impl ImGuiRenderer {
         self.platform.handle_event(self.context.io_mut(), &self.window, event);
     }
 
-    /// Set display size
+    /// Set display size (in logical points)
     pub fn set_display_size(&mut self, width: f32, height: f32) {
         self.context.io_mut().display_size = [width, height];
+    }
+    
+    /// Update scale factor (call when window moves to a different display)
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        self.scale_factor = scale_factor;
+        let sf = scale_factor as f32;
+        self.context.io_mut().display_framebuffer_scale = [sf, sf];
+    }
+    
+    /// Get current scale factor
+    pub fn scale_factor(&self) -> f64 {
+        self.scale_factor
     }
 
     /// Resize surface
