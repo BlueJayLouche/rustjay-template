@@ -54,6 +54,9 @@ struct App {
 
     // Modifier state
     shift_pressed: bool,
+    
+    // Track if initial device refresh has been done
+    initial_refresh_done: bool,
 }
 
 impl App {
@@ -72,6 +75,7 @@ impl App {
             input_manager: None,
             audio_analyzer: None,
             shift_pressed: false,
+            initial_refresh_done: false,
         }
     }
 
@@ -557,6 +561,17 @@ impl ApplicationHandler for App {
             }
 
             self.input_manager = Some(manager);
+        }
+        
+        // Do initial device refresh once both input manager and GUI are ready
+        if !self.initial_refresh_done {
+            if let (Some(ref mut manager), Some(ref mut gui)) = 
+                (self.input_manager.as_mut(), self.control_gui.as_mut()) 
+            {
+                log::info!("Doing initial device refresh");
+                gui.refresh_devices(manager);
+                self.initial_refresh_done = true;
+            }
         }
 
         // Initialize audio analyzer

@@ -213,6 +213,20 @@ impl ControlGui {
 
         ui.spacing();
 
+        // Refresh Sources button - prominently at the top
+        let _btn_color = ui.push_style_color(imgui::StyleColor::Button, [0.2, 0.6, 0.8, 1.0]);
+        let _btn_hover = ui.push_style_color(imgui::StyleColor::ButtonHovered, [0.3, 0.7, 0.9, 1.0]);
+        let _btn_active = ui.push_style_color(imgui::StyleColor::ButtonActive, [0.1, 0.5, 0.7, 1.0]);
+        if ui.button_with_size("Refresh Sources", [ui.content_region_avail()[0], 30.0]) {
+            let mut state = self.shared_state.lock().unwrap();
+            state.input_command = InputCommand::RefreshDevices;
+        }
+        // Tokens are automatically popped when they go out of scope
+
+        ui.spacing();
+        ui.separator();
+        ui.spacing();
+
         // Webcam section
         ui.text_colored([0.0, 1.0, 1.0, 1.0], "Webcam");
         if !self.webcam_devices.is_empty() {
