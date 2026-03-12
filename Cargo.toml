@@ -83,3 +83,6 @@ webcam = ["nokhwa"]
 
 [profile.dev]
 opt-level = 1
+
+# Make this an independent package (not part of parent workspace)
+[workspace]
