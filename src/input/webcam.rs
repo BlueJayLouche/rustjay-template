@@ -3,7 +3,7 @@
 //! Local camera capture using nokhwa.
 
 use nokhwa::Camera;
-use nokhwa::pixel_format::RgbAFormat;
+use nokhwa::pixel_format::YuyvFormat;
 use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType, Resolution};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -49,7 +49,8 @@ impl WebcamCapture {
 
         let thread_handle = thread::spawn(move || {
             let index = CameraIndex::Index(device_index as u32);
-            let format = RequestedFormat::new::<RgbAFormat>(
+            // Request YUYV format - most webcams support this natively
+            let format = RequestedFormat::new::<YuyvFormat>(
                 RequestedFormatType::AbsoluteHighestResolution
             );
 
@@ -83,15 +84,39 @@ impl WebcamCapture {
                     Ok(frame) => {
                         let buffer = frame.buffer();
                         
-                        // Convert RGBA to BGRA
-                        let rgba_data = buffer.to_vec();
-                        let mut bgra_data = Vec::with_capacity(rgba_data.len());
+                        // Convert YUY2 to BGRA
+                        let yuyv_data = buffer.to_vec();
+                        let mut bgra_data = Vec::with_capacity((actual_width * actual_height * 4) as usize);
                         
-                        for chunk in rgba_data.chunks_exact(4) {
-                            bgra_data.push(chunk[2]); // B
-                            bgra_data.push(chunk[1]); // G
-                            bgra_data.push(chunk[0]); // R
-                            bgra_data.push(chunk[3]); // A
+                        // YUY2 is 2 bytes per pixel, arranged as: Y0 U Y1 V
+                        // Each pair of pixels shares U and V
+                        for chunk in yuyv_data.chunks_exact(4) {
+                            let y0 = chunk[0] as f32;
+                            let u = chunk[1] as f32 - 128.0;
+                            let y1 = chunk[2] as f32;
+                            let v = chunk[3] as f32 - 128.0;
+                            
+                            // Convert first pixel (Y0, U, V)
+                            let r0 = (y0 + 1.402 * v).clamp(0.0, 255.0) as u8;
+                            let g0 = (y0 - 0.344136 * u - 0.714136 * v).clamp(0.0, 255.0) as u8;
+                            let b0 = (y0 + 1.772 * u).clamp(0.0, 255.0) as u8;
+                            
+                            // Convert second pixel (Y1, U, V)
+                            let r1 = (y1 + 1.402 * v).clamp(0.0, 255.0) as u8;
+                            let g1 = (y1 - 0.344136 * u - 0.714136 * v).clamp(0.0, 255.0) as u8;
+                            let b1 = (y1 + 1.772 * u).clamp(0.0, 255.0) as u8;
+                            
+                            // Output as BGRA for first pixel
+                            bgra_data.push(b0);
+                            bgra_data.push(g0);
+                            bgra_data.push(r0);
+                            bgra_data.push(255); // Alpha
+                            
+                            // Output as BGRA for second pixel
+                            bgra_data.push(b1);
+                            bgra_data.push(g1);
+                            bgra_data.push(r1);
+                            bgra_data.push(255); // Alpha
                         }
 
                         let webcam_frame = WebcamFrame {
@@ -148,13 +173,13 @@ pub fn list_cameras() -> Vec<String> {
 
     for i in 0..4 {
         let index = CameraIndex::Index(i as u32);
-        let format = RequestedFormat::new::<RgbAFormat>(
+        let format = RequestedFormat::new::<YuyvFormat>(
             RequestedFormatType::AbsoluteHighestResolution
         );
 
         match Camera::new(index, format) {
-            Ok(_cam) => {
-                let name = format!("Camera {}", i);
+            Ok(cam) => {
+                let name = cam.info().human_name();
                 cameras.push(name);
             }
             Err(_) => {}
