@@ -326,14 +326,16 @@ fn process_audio_frame(
     sample_rate: f32,
     fft_size: usize,
     r2c: &std::sync::Arc<dyn RealToComplex<f32>>,
-    scratch: &mut [f32],
+    scratch: &mut [rustfft::num_complex::Complex<f32>],
     beat_energy: &mut f32,
     beat_history: &mut Vec<f32>,
     beat_counter: &mut u32,
     shared_data: &Arc<Mutex<AudioData>>,
 ) {
-    // Apply Hann window
-    let windowed: Vec<f32> = frame
+    use rustfft::num_complex::Complex;
+
+    // Apply Hann window and convert to mutable vec
+    let mut windowed: Vec<f32> = frame
         .iter()
         .enumerate()
         .map(|(i, &s)| {
@@ -343,8 +345,8 @@ fn process_audio_frame(
         .collect();
 
     // Perform FFT
-    let mut spectrum = r2c.make_output_vec();
-    if r2c.process_with_scratch(&windowed, &mut spectrum, scratch).is_err() {
+    let mut spectrum: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); fft_size / 2 + 1];
+    if r2c.process_with_scratch(&mut windowed, &mut spectrum, scratch).is_err() {
         return;
     }
 
@@ -426,7 +428,7 @@ fn calculate_bands(magnitudes: &[f32], sample_rate: f32, fft_size: usize) -> [f3
 
     for (i, (low, high)) in ranges.iter().enumerate() {
         let low_bin = (low / freq_resolution) as usize;
-        let high_bin = (high / freq_resolution).min(magnitudes.len() - 1) as usize;
+        let high_bin = ((high / freq_resolution) as usize).min(magnitudes.len().saturating_sub(1));
 
         if low_bin < magnitudes.len() && high_bin > low_bin {
             let sum: f32 = magnitudes[low_bin..=high_bin].iter().sum();

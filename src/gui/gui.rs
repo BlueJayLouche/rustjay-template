@@ -16,13 +16,13 @@ pub struct ControlGui {
     webcam_devices: Vec<String>,
     ndi_sources: Vec<String>,
     #[cfg(target_os = "macos")]
-    syphon_servers: Vec<String>,
+    syphon_servers: Vec<crate::input::SyphonServerInfo>,
 
     // Selection state
-    selected_webcam: i32,
-    selected_ndi: i32,
+    selected_webcam: usize,
+    selected_ndi: usize,
     #[cfg(target_os = "macos")]
-    selected_syphon: i32,
+    selected_syphon: usize,
 
     // NDI output name
     ndi_output_name: String,
@@ -262,12 +262,16 @@ impl ControlGui {
 
             ui.text_colored([0.0, 1.0, 1.0, 1.0], "Syphon (macOS)");
             if !self.syphon_servers.is_empty() {
-                let server_names: Vec<&str> = self.syphon_servers.iter().map(|s| s.as_str()).collect();
-                ui.combo_simple_string("Select Syphon Server", &mut self.selected_syphon, &server_names);
+                let server_names: Vec<String> = self.syphon_servers.iter()
+                    .map(|s| format!("{} - {}", s.app_name, s.name))
+                    .collect();
+                let server_name_refs: Vec<&str> = server_names.iter().map(|s| s.as_str()).collect();
+                let selected = self.selected_syphon;
+                ui.combo_simple_string("Select Syphon Server", &mut self.selected_syphon, &server_name_refs);
 
                 if ui.button("Start Syphon") {
-                    let server_name = self.syphon_servers.get(self.selected_syphon as usize)
-                        .cloned()
+                    let server_name = self.syphon_servers.get(selected)
+                        .map(|s| s.name.clone())
                         .unwrap_or_default();
                     let mut state = self.shared_state.lock().unwrap();
                     state.input_command = InputCommand::StartSyphon { server_name };

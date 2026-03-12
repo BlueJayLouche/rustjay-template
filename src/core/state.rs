@@ -14,6 +14,12 @@ pub enum InputType {
     Syphon,
 }
 
+impl Default for InputType {
+    fn default() -> Self {
+        InputType::None
+    }
+}
+
 impl InputType {
     /// Get display name for UI
     pub fn name(&self) -> &'static str {

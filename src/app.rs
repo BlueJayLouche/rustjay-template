@@ -500,7 +500,8 @@ impl ApplicationHandler for App {
         if let Some(ref control_window) = self.control_window {
             if window_id == control_window.id() {
                 if let Some(ref mut renderer) = self.imgui_renderer {
-                    renderer.handle_event(&event);
+                    let winit_event = winit::event::Event::WindowEvent { window_id, event: event.clone() };
+                    renderer.handle_event(&winit_event);
                 }
 
                 match event {

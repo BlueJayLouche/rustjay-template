@@ -11,11 +11,12 @@ pub struct ImGuiRenderer {
     context: imgui::Context,
     renderer: imgui_wgpu::Renderer,
     platform: imgui_winit_support::WinitPlatform,
+    window: Arc<Window>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
-    preview_textures: Vec<(imgui::TextureId, imgui_wgpu::Texture)>,
+    preview_texture_ids: Vec<imgui::TextureId>,
 }
 
 impl ImGuiRenderer {
@@ -83,18 +84,18 @@ impl ImGuiRenderer {
             context,
             renderer,
             platform,
+            window,
             device,
             queue,
             surface,
             surface_config,
-            preview_textures: Vec::new(),
+            preview_texture_ids: Vec::new(),
         })
     }
 
     /// Handle window event
-    pub fn handle_event(&mut self, event: &winit::event::WindowEvent) {
-        let window = self.platform.window();
-        self.platform.handle_event(self.context.io_mut(), window, event);
+    pub fn handle_event(&mut self, event: &winit::event::Event<()>) {
+        self.platform.handle_event(self.context.io_mut(), &self.window, event);
     }
 
     /// Set display size
@@ -119,14 +120,14 @@ impl ImGuiRenderer {
                 height,
                 depth_or_array_layers: 1,
             },
-            format: wgpu::TextureFormat::Bgra8Unorm,
+            format: Some(wgpu::TextureFormat::Bgra8Unorm),
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             ..Default::default()
         };
 
         let texture = imgui_wgpu::Texture::new(&self.device, &self.renderer, texture_config);
-        let texture_id = texture.id();
-        self.preview_textures.push((texture_id, texture));
+        let texture_id = self.renderer.textures.insert(texture);
+        self.preview_texture_ids.push(texture_id);
         texture_id
     }
 
@@ -137,8 +138,8 @@ impl ImGuiRenderer {
         source_texture: &wgpu::Texture,
         encoder: &mut wgpu::CommandEncoder,
     ) {
-        // Find the ImGui texture
-        if let Some((_, imgui_tex)) = self.preview_textures.iter_mut().find(|(id, _)| *id == texture_id) {
+        // Get the imgui texture
+        if let Some(imgui_tex) = self.renderer.textures.get(texture_id) {
             // Copy from source texture to ImGui texture
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -169,8 +170,7 @@ impl ImGuiRenderer {
     {
         // Prepare frame
         let io = self.context.io_mut();
-        let window = self.platform.window();
-        self.platform.prepare_frame(io, window)?;
+        self.platform.prepare_frame(io, &self.window)?;
 
         // Build UI
         let mut ui = self.context.frame();

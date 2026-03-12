@@ -86,8 +86,7 @@ impl WgpuEngine {
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No suitable GPU adapter found"))?;
+            .await?;
 
         let (device, queue) = adapter
             .request_device(
