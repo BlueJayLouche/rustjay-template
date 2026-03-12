@@ -1,0 +1,27 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+
+# Test outputs
+*.png
+*.jpg
+*.mov
+*.mp4
+!assets/**/*.png
+!assets/**/*.jpg
