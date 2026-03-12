@@ -3,7 +3,7 @@
 //! Dual-window application handler implementing winit's ApplicationHandler.
 
 use crate::audio::AudioAnalyzer;
-use crate::core::{InputCommand, OutputCommand, SharedState};
+use crate::core::{InputCommand, InputType, OutputCommand, SharedState};
 use crate::engine::WgpuEngine;
 use crate::gui::{ControlGui, ImGuiRenderer};
 use crate::input::InputManager;
@@ -233,7 +233,7 @@ impl App {
 
             // Handle Syphon texture (zero-copy path)
             #[cfg(target_os = "macos")]
-            if manager.input_type() == crate::input::InputType::Syphon {
+            if manager.input_type() == InputType::Syphon {
                 if let Some(texture) = manager.take_syphon_texture() {
                     let width = texture.width();
                     let height = texture.height();

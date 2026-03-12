@@ -3,20 +3,19 @@
 //! wgpu-based renderer for Dear ImGui.
 
 use anyhow::Result;
-use imgui_wgpu::{Renderer, RendererConfig, Texture as ImGuiTexture, TextureConfig};
 use std::sync::Arc;
 use winit::window::Window;
 
 /// ImGui renderer using wgpu
 pub struct ImGuiRenderer {
     context: imgui::Context,
-    renderer: Renderer,
+    renderer: imgui_wgpu::Renderer,
     platform: imgui_winit_support::WinitPlatform,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
-    preview_textures: Vec<ImGuiTexture>,
+    preview_textures: Vec<(imgui::TextureId, imgui_wgpu::Texture)>,
 }
 
 impl ImGuiRenderer {
@@ -73,12 +72,12 @@ impl ImGuiRenderer {
         style.scrollbar_rounding = 4.0;
 
         // Create renderer
-        let renderer_config = RendererConfig {
+        let renderer_config = imgui_wgpu::RendererConfig {
             texture_format: surface_format,
             ..Default::default()
         };
 
-        let renderer = Renderer::new(&mut context, &device, &queue, renderer_config);
+        let renderer = imgui_wgpu::Renderer::new(&mut context, &device, &queue, renderer_config);
 
         Ok(Self {
             context,
@@ -94,7 +93,8 @@ impl ImGuiRenderer {
 
     /// Handle window event
     pub fn handle_event(&mut self, event: &winit::event::WindowEvent) {
-        self.platform.handle_event(self.context.io_mut(), self.platform.window(), event);
+        let window = self.platform.window();
+        self.platform.handle_event(self.context.io_mut(), window, event);
     }
 
     /// Set display size
@@ -113,7 +113,7 @@ impl ImGuiRenderer {
 
     /// Create a preview texture for ImGui display
     pub fn create_preview_texture(&mut self, width: u32, height: u32) -> imgui::TextureId {
-        let texture_config = TextureConfig {
+        let texture_config = imgui_wgpu::TextureConfig {
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -124,9 +124,9 @@ impl ImGuiRenderer {
             ..Default::default()
         };
 
-        let texture = ImGuiTexture::new(&self.device, &self.renderer, texture_config);
-        let texture_id = texture.texture_id();
-        self.preview_textures.push(texture);
+        let texture = imgui_wgpu::Texture::new(&self.device, &self.renderer, texture_config);
+        let texture_id = texture.id();
+        self.preview_textures.push((texture_id, texture));
         texture_id
     }
 
@@ -138,7 +138,7 @@ impl ImGuiRenderer {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         // Find the ImGui texture
-        if let Some(imgui_tex) = self.preview_textures.iter_mut().find(|t| t.texture_id() == texture_id) {
+        if let Some((_, imgui_tex)) = self.preview_textures.iter_mut().find(|(id, _)| *id == texture_id) {
             // Copy from source texture to ImGui texture
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -169,7 +169,8 @@ impl ImGuiRenderer {
     {
         // Prepare frame
         let io = self.context.io_mut();
-        self.platform.prepare_frame(io, self.platform.window())?;
+        let window = self.platform.window();
+        self.platform.prepare_frame(io, window)?;
 
         // Build UI
         let mut ui = self.context.frame();

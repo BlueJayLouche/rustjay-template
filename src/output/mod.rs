@@ -12,10 +12,12 @@ pub mod ndi_output;
 #[cfg(target_os = "macos")]
 pub mod syphon_output;
 
+use ndi_output::NdiOutputSender;
+
 /// Manages all video outputs
 pub struct OutputManager {
     /// NDI network output
-    ndi_output: Option<ndi_output::NdiOutputSender>,
+    ndi_output: Option<NdiOutputSender>,
 
     /// Syphon output (macOS)
     #[cfg(target_os = "macos")]
@@ -43,7 +45,7 @@ impl OutputManager {
         height: u32,
         include_alpha: bool,
     ) -> anyhow::Result<()> {
-        let sender = ndi_output::NdiOutputSender::new(name, width, height, include_alpha)?;
+        let sender = NdiOutputSender::new(name, width, height, include_alpha)?;
         self.ndi_output = Some(sender);
         log::info!("NDI output started: {} ({}x{})", name, width, height);
         Ok(())
@@ -64,8 +66,7 @@ impl OutputManager {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
     ) -> anyhow::Result<()> {
-        let mut syphon = syphon_output::SyphonOutput::new(server_name, device, queue)?;
-        syphon.initialize(1920, 1080)?;
+        let syphon = syphon_output::SyphonOutput::new(server_name, device, queue)?;
         self.syphon_output = Some(syphon);
         log::info!("Syphon output started: {}", server_name);
         Ok(())
@@ -74,8 +75,7 @@ impl OutputManager {
     /// Stop Syphon output (macOS only)
     #[cfg(target_os = "macos")]
     pub fn stop_syphon(&mut self) {
-        if let Some(mut syphon) = self.syphon_output.take() {
-            syphon.shutdown();
+        if self.syphon_output.take().is_some() {
             log::info!("Syphon output stopped");
         }
     }
@@ -84,11 +84,8 @@ impl OutputManager {
     pub fn submit_frame(&mut self, texture: &wgpu::Texture, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.frame_count += 1;
 
-        // NDI output
-        if let Some(ref mut ndi) = self.ndi_output {
-            // TODO: Implement NDI frame submission
-            // This requires GPU readback which is complex
-        }
+        // NDI output - TODO: implement frame sending
+        // This requires GPU readback which is complex
 
         // Syphon output (zero-copy on macOS)
         #[cfg(target_os = "macos")]

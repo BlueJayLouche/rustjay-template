@@ -51,7 +51,7 @@ pub struct WgpuEngine {
     uniform_bind_group_layout: wgpu::BindGroupLayout,
 
     // Render target (internal resolution)
-    render_target: Texture,
+    pub render_target: Texture,
 
     // Input texture
     pub input_texture: InputTexture,

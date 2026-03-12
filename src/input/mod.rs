@@ -70,7 +70,7 @@ pub struct InputManager {
     webcam_devices: Vec<String>,
     ndi_sources: Vec<String>,
     #[cfg(target_os = "macos")]
-    syphon_servers: Vec<String>,
+    syphon_servers: Vec<SyphonServerInfo>,
 }
 
 impl InputManager {
@@ -131,20 +131,16 @@ impl InputManager {
 
     /// Get list of available Syphon servers (macOS only)
     #[cfg(target_os = "macos")]
-    pub fn syphon_servers(&mut self) -> &[String] {
+    pub fn syphon_servers(&mut self) -> &[SyphonServerInfo] {
         if self.syphon_servers.is_empty() {
             let discovery = syphon_input::SyphonDiscovery::new();
-            let servers = discovery.discover_servers();
-            self.syphon_servers = servers
-                .into_iter()
-                .map(|s| s.display_name().to_string())
-                .collect();
+            self.syphon_servers = discovery.discover_servers();
         }
         &self.syphon_servers
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub fn syphon_servers(&self) -> &[String] {
+    pub fn syphon_servers(&self) -> &[SyphonServerInfo] {
         &[]
     }
 
@@ -280,7 +276,6 @@ impl InputManager {
         // Handle webcam frames
         if let Some(ref receiver) = self.frame_receiver {
             let mut latest_frame: Option<WebcamFrame> = None;
-            // Drain the channel (keep only latest)
             while let Ok(frame) = receiver.try_recv() {
                 latest_frame = Some(frame);
             }
