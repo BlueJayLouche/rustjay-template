@@ -336,6 +336,20 @@ impl App {
 
     /// Update audio analysis
     fn update_audio(&mut self) {
+        // Sync settings from shared state TO analyzer
+        if let Some(ref analyzer) = self.audio_analyzer {
+            let (amplitude, smoothing, normalize, pink_noise) = {
+                let state = self.shared_state.lock().unwrap();
+                (state.audio.amplitude, state.audio.smoothing, state.audio.normalize, state.audio.pink_noise_shaping)
+            };
+            
+            analyzer.set_amplitude(amplitude);
+            analyzer.set_smoothing(smoothing);
+            analyzer.set_normalize(normalize);
+            analyzer.set_pink_noise_shaping(pink_noise);
+        }
+        
+        // Read analysis results FROM analyzer TO shared state
         if let Some(ref analyzer) = self.audio_analyzer {
             let fft = analyzer.get_fft();
             let volume = analyzer.get_volume();

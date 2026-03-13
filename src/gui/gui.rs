@@ -457,6 +457,12 @@ impl ControlGui {
         ui.spacing();
 
         if enabled {
+            // Get additional audio settings
+            let (mut normalize, mut pink_noise) = {
+                let state = self.shared_state.lock().unwrap();
+                (state.audio.normalize, state.audio.pink_noise_shaping)
+            };
+
             // Amplitude
             ui.text("Input Amplitude");
             if ui.slider("Amplitude", 0.1, 5.0, &mut amplitude) {
@@ -465,11 +471,32 @@ impl ControlGui {
             }
 
             // Smoothing
-            ui.text("Smoothing");
+            ui.text("Smoothing (0 = instant, 0.99 = very slow)");
             if ui.slider("Smoothing", 0.0, 0.95, &mut smoothing) {
                 let mut state = self.shared_state.lock().unwrap();
-                state.audio.smoothing = smoothing;
+                state.audio.smoothing = smoothing.clamp(0.0, 0.99);
             }
+
+            ui.spacing();
+            ui.separator();
+            ui.spacing();
+
+            // Processing options
+            ui.text("Processing Options");
+            
+            if ui.checkbox("Normalize Bands", &mut normalize) {
+                let mut state = self.shared_state.lock().unwrap();
+                state.audio.normalize = normalize;
+            }
+            ui.same_line();
+            ui.text_disabled("(Scales all bands to max)");
+
+            if ui.checkbox("+3dB/Octave Shaping", &mut pink_noise) {
+                let mut state = self.shared_state.lock().unwrap();
+                state.audio.pink_noise_shaping = pink_noise;
+            }
+            ui.same_line();
+            ui.text_disabled("(Compensates for pink noise spectrum)");
 
             ui.spacing();
             ui.separator();

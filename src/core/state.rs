@@ -100,6 +100,10 @@ pub struct AudioState {
     pub selected_device: Option<String>,
     /// List of available audio devices
     pub available_devices: Vec<String>,
+    /// Normalize FFT bands to maximum value
+    pub normalize: bool,
+    /// Apply +3dB per octave pink noise compensation
+    pub pink_noise_shaping: bool,
 }
 
 /// NDI output state
@@ -243,6 +247,8 @@ impl SharedState {
                 enabled: true,
                 amplitude: 1.0,
                 smoothing: 0.5,
+                normalize: true,
+                pink_noise_shaping: false,
                 ..Default::default()
             },
             audio_command: AudioCommand::None,

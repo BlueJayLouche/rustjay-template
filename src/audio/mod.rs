@@ -41,6 +41,8 @@ struct AudioData {
     beat_phase: f32,
     amplitude: f32,
     smoothing: f32,
+    normalize: bool,
+    pink_noise_shaping: bool,
 }
 
 impl Default for AudioData {
@@ -52,6 +54,8 @@ impl Default for AudioData {
             beat_phase: 0.0,
             amplitude: 1.0,
             smoothing: 0.5,
+            normalize: true,
+            pink_noise_shaping: false,
         }
     }
 }
@@ -197,7 +201,27 @@ impl AudioAnalyzer {
 
     /// Set smoothing
     pub fn set_smoothing(&self, smoothing: f32) {
-        self.shared_data.lock().unwrap().smoothing = smoothing;
+        self.shared_data.lock().unwrap().smoothing = smoothing.clamp(0.0, 0.99);
+    }
+
+    /// Get normalization enabled
+    pub fn get_normalize(&self) -> bool {
+        self.shared_data.lock().unwrap().normalize
+    }
+
+    /// Set normalization enabled
+    pub fn set_normalize(&self, normalize: bool) {
+        self.shared_data.lock().unwrap().normalize = normalize;
+    }
+
+    /// Get pink noise shaping (+3dB/octave) enabled
+    pub fn get_pink_noise_shaping(&self) -> bool {
+        self.shared_data.lock().unwrap().pink_noise_shaping
+    }
+
+    /// Set pink noise shaping (+3dB/octave) enabled
+    pub fn set_pink_noise_shaping(&self, enabled: bool) {
+        self.shared_data.lock().unwrap().pink_noise_shaping = enabled;
     }
 
     /// Build audio stream for f32 samples
@@ -464,14 +488,40 @@ fn process_audio_frame(
 
     // Update shared data
     if let Ok(mut data) = shared_data.lock() {
-        let smoothing = data.smoothing;
+        let smoothing = data.smoothing.clamp(0.0, 0.99);
         let amplitude = data.amplitude;
+        let normalize = data.normalize;
+        let pink_noise_shaping = data.pink_noise_shaping;
 
+        // Find max band value for normalization
+        let max_band = bands.iter().cloned().fold(0.0f32, f32::max).max(0.001);
+        
         for (i, band) in bands.iter().enumerate() {
-            data.fft[i] = data.fft[i] * smoothing + band * amplitude * (1.0 - smoothing);
+            // Apply pink noise compensation (+3dB per octave = multiply higher bands)
+            // Band 0 (Sub): 1.0x, Band 7 (Air): 2.83x (approx +9dB total)
+            let pink_factor = if pink_noise_shaping {
+                1.0 + (i as f32 * 0.26) // Linear approximation of +3dB/octave
+            } else {
+                1.0
+            };
+            
+            // Normalize and apply pink shaping
+            let normalized_band = if normalize {
+                (band / max_band) * pink_factor
+            } else {
+                band * pink_factor
+            };
+            
+            // Apply exponential moving average smoothing
+            let smoothed = data.fft[i] * smoothing + normalized_band * (1.0 - smoothing);
+            
+            // Apply amplitude to final output (not to the new sample)
+            data.fft[i] = smoothed * amplitude;
         }
 
-        data.volume = data.volume * smoothing + volume * amplitude * (1.0 - smoothing);
+        // Volume smoothing and amplitude
+        let smoothed_volume = data.volume * smoothing + volume * (1.0 - smoothing);
+        data.volume = smoothed_volume * amplitude;
 
         if is_beat {
             data.beat = true;
