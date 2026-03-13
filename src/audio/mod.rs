@@ -73,26 +73,56 @@ impl AudioAnalyzer {
 
     /// Start audio analysis with specific device (None for default)
     pub fn start_with_device(&mut self, device_name: Option<&str>) -> anyhow::Result<()> {
+        log::info!("[Audio] start_with_device called with: {:?}", device_name);
+        
         if self.stream.is_some() {
+            log::info!("[Audio] Stopping existing stream first");
             self.stop();
         }
 
         let host = cpal::default_host();
         
+        // List available devices for debugging
+        match host.input_devices() {
+            Ok(devices) => {
+                log::info!("[Audio] Available input devices:");
+                for d in devices {
+                    if let Ok(name) = d.name() {
+                        log::info!("  - {}", name);
+                    }
+                }
+            }
+            Err(e) => log::warn!("[Audio] Failed to list input devices: {}", e),
+        }
+        
         // Select device
         let device = match device_name {
             Some(name) => {
+                log::info!("[Audio] Looking for device: '{}'", name);
                 // Find device by name
                 host.input_devices()?
-                    .find(|d| d.name().ok().as_deref() == Some(name))
+                    .find(|d| {
+                        let dev_name = d.name().ok();
+                        let matches = dev_name.as_deref() == Some(name);
+                        log::debug!("[Audio] Checking device: {:?}, matches: {}", dev_name, matches);
+                        matches
+                    })
                     .ok_or_else(|| anyhow::anyhow!("Audio device '{}' not found", name))?
             }
-            None => host
-                .default_input_device()
-                .ok_or_else(|| anyhow::anyhow!("No default input device"))?,
+            None => {
+                log::info!("[Audio] Using default input device");
+                host.default_input_device()
+                    .ok_or_else(|| anyhow::anyhow!("No default input device"))?
+            }
         };
         
-        log::info!("[Audio] Using input device: {:?}", device.name()?);
+        log::info!("[Audio] Selected device: {:?}", device.name()?);
+        
+        // Reset shared data when starting new device
+        if let Ok(mut data) = self.shared_data.lock() {
+            *data = AudioData::default();
+            log::info!("[Audio] Audio data reset");
+        }
 
         let config = device.default_input_config()?;
         log::info!("Audio config: {:?}", config);
@@ -128,6 +158,12 @@ impl AudioAnalyzer {
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
         self.stream = None;
+        
+        // Clear the audio data so old values don't persist
+        if let Ok(mut data) = self.shared_data.lock() {
+            *data = AudioData::default();
+        }
+        
         log::info!("Audio analyzer stopped");
     }
 
