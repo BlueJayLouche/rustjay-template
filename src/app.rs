@@ -2,8 +2,8 @@
 //!
 //! Dual-window application handler implementing winit's ApplicationHandler.
 
-use crate::audio::AudioAnalyzer;
-use crate::core::{InputCommand, InputType, OutputCommand, SharedState};
+use crate::audio::{AudioAnalyzer, list_audio_devices};
+use crate::core::{AudioCommand, InputCommand, InputType, OutputCommand, SharedState};
 use crate::engine::WgpuEngine;
 use crate::gui::{ControlGui, ImGuiRenderer};
 use crate::input::InputManager;
@@ -225,6 +225,58 @@ impl App {
                 }
                 let mut state = self.shared_state.lock().unwrap();
                 state.syphon_output.enabled = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// Process audio commands
+    fn process_audio_commands(&mut self) {
+        let command = {
+            let mut state = self.shared_state.lock().unwrap();
+            std::mem::replace(&mut state.audio_command, AudioCommand::None)
+        };
+
+        match command {
+            AudioCommand::RefreshDevices => {
+                let devices = list_audio_devices();
+                log::info!("[Audio] Refreshed devices: {} found", devices.len());
+                let mut state = self.shared_state.lock().unwrap();
+                state.audio.available_devices = devices;
+            }
+            AudioCommand::SelectDevice(device_name) => {
+                log::info!("[Audio] Selecting device: {}", device_name);
+                let mut state = self.shared_state.lock().unwrap();
+                state.audio.selected_device = Some(device_name.clone());
+                
+                // Restart audio with new device if already running
+                if let Some(ref mut analyzer) = self.audio_analyzer {
+                    analyzer.stop();
+                    if let Err(e) = analyzer.start_with_device(Some(&device_name)) {
+                        log::error!("Failed to start audio with device '{}': {}", device_name, e);
+                    } else {
+                        log::info!("[Audio] Started with device: {}", device_name);
+                    }
+                }
+            }
+            AudioCommand::Start => {
+                if let Some(ref mut analyzer) = self.audio_analyzer {
+                    let device = {
+                        let state = self.shared_state.lock().unwrap();
+                        state.audio.selected_device.clone()
+                    };
+                    if let Err(e) = analyzer.start_with_device(device.as_deref()) {
+                        log::error!("Failed to start audio: {}", e);
+                    } else {
+                        log::info!("[Audio] Analysis started");
+                    }
+                }
+            }
+            AudioCommand::Stop => {
+                if let Some(ref mut analyzer) = self.audio_analyzer {
+                    analyzer.stop();
+                    log::info!("[Audio] Analysis stopped");
+                }
             }
             _ => {}
         }
@@ -588,6 +640,7 @@ impl ApplicationHandler for App {
         // Process commands
         self.process_input_commands();
         self.process_output_commands();
+        self.process_audio_commands();
 
         // Update systems
         self.update_input();

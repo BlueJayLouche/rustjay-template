@@ -4,7 +4,7 @@
 
 #![allow(deprecated)]
 
-use crate::core::{GuiTab, HsbParams, InputCommand, OutputCommand, SharedState};
+use crate::core::{AudioCommand, GuiTab, HsbParams, InputCommand, OutputCommand, SharedState};
 use crate::input::InputManager;
 use std::sync::{Arc, Mutex};
 
@@ -17,12 +17,14 @@ pub struct ControlGui {
     ndi_sources: Vec<String>,
     #[cfg(target_os = "macos")]
     syphon_servers: Vec<crate::input::SyphonServerInfo>,
+    audio_devices: Vec<String>,
 
     // Selection state
     selected_webcam: usize,
     selected_ndi: usize,
     #[cfg(target_os = "macos")]
     selected_syphon: usize,
+    selected_audio_device: usize,
 
     // NDI output name
     ndi_output_name: String,
@@ -54,10 +56,12 @@ impl ControlGui {
             ndi_sources: Vec::new(),
             #[cfg(target_os = "macos")]
             syphon_servers: Vec::new(),
+            audio_devices: Vec::new(),
             selected_webcam: 0,
             selected_ndi: 0,
             #[cfg(target_os = "macos")]
             selected_syphon: 0,
+            selected_audio_device: 0,
             ndi_output_name: ndi_name,
             #[cfg(target_os = "macos")]
             syphon_output_name: syphon_name,
@@ -84,6 +88,18 @@ impl ControlGui {
         #[cfg(target_os = "macos")]
         {
             self.syphon_servers = input_manager.syphon_servers().to_vec();
+        }
+        
+        // Refresh audio devices
+        self.audio_devices = crate::audio::list_audio_devices();
+        log::info!("[GUI] Found {} audio device(s)", self.audio_devices.len());
+        for device in &self.audio_devices {
+            log::info!("  - {}", device);
+        }
+        
+        // Update shared state with available devices
+        if let Ok(mut state) = self.shared_state.lock() {
+            state.audio.available_devices = self.audio_devices.clone();
         }
     }
 
@@ -372,7 +388,7 @@ impl ControlGui {
 
     /// Build the Audio tab
     fn build_audio_tab(&mut self, ui: &imgui::Ui) {
-        let (mut enabled, mut amplitude, mut smoothing, fft, volume) = {
+        let (mut enabled, mut amplitude, mut smoothing, fft, volume, selected_device) = {
             let state = self.shared_state.lock().unwrap();
             (
                 state.audio.enabled,
@@ -380,16 +396,62 @@ impl ControlGui {
                 state.audio.smoothing,
                 state.audio.fft,
                 state.audio.volume,
+                state.audio.selected_device.clone(),
             )
         };
 
         ui.text("Audio Analysis");
         ui.separator();
 
+        // Audio Device Selection
+        ui.text_colored([0.0, 1.0, 1.0, 1.0], "Input Device");
+        
+        // Refresh button
+        if ui.button("Refresh Audio Devices") {
+            let mut state = self.shared_state.lock().unwrap();
+            state.audio_command = AudioCommand::RefreshDevices;
+        }
+        
+        ui.spacing();
+        
+        // Device dropdown
+        if !self.audio_devices.is_empty() {
+            let device_names: Vec<&str> = self.audio_devices.iter().map(|s| s.as_str()).collect();
+            
+            // Find current selection index
+            if let Some(ref current) = selected_device {
+                if let Some(idx) = self.audio_devices.iter().position(|d| d == current) {
+                    self.selected_audio_device = idx;
+                }
+            }
+            
+            if ui.combo_simple_string("Select Audio Device", &mut self.selected_audio_device, &device_names) {
+                let device_name = self.audio_devices.get(self.selected_audio_device).cloned();
+                let mut state = self.shared_state.lock().unwrap();
+                state.audio_command = AudioCommand::SelectDevice(device_name.unwrap_or_default());
+            }
+            
+            // Show currently selected
+            if let Some(ref device) = selected_device {
+                ui.text(format!("Active: {}", device));
+            }
+        } else {
+            ui.text_disabled("No audio devices found. Click Refresh.");
+        }
+
+        ui.spacing();
+        ui.separator();
+        ui.spacing();
+
         // Enable/disable
         if ui.checkbox("Enable Audio Analysis", &mut enabled) {
             let mut state = self.shared_state.lock().unwrap();
             state.audio.enabled = enabled;
+            if enabled {
+                state.audio_command = AudioCommand::Start;
+            } else {
+                state.audio_command = AudioCommand::Stop;
+            }
         }
 
         ui.spacing();

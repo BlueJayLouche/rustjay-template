@@ -7,6 +7,24 @@ use realfft::{RealFftPlanner, RealToComplex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// List available audio input devices
+pub fn list_audio_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    match host.input_devices() {
+        Ok(devices) => devices
+            .filter_map(|d| d.name().ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Get default audio input device name
+pub fn default_audio_device() -> Option<String> {
+    let host = cpal::default_host();
+    host.default_input_device()
+        .and_then(|d| d.name().ok())
+}
+
 /// Audio analyzer running in real-time
 pub struct AudioAnalyzer {
     stream: Option<cpal::Stream>,
@@ -48,16 +66,33 @@ impl AudioAnalyzer {
         }
     }
 
-    /// Start audio analysis
+    /// Start audio analysis with default device
     pub fn start(&mut self) -> anyhow::Result<()> {
+        self.start_with_device(None)
+    }
+
+    /// Start audio analysis with specific device (None for default)
+    pub fn start_with_device(&mut self, device_name: Option<&str>) -> anyhow::Result<()> {
         if self.stream.is_some() {
-            return Ok(());
+            self.stop();
         }
 
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("No default input device"))?;
+        
+        // Select device
+        let device = match device_name {
+            Some(name) => {
+                // Find device by name
+                host.input_devices()?
+                    .find(|d| d.name().ok().as_deref() == Some(name))
+                    .ok_or_else(|| anyhow::anyhow!("Audio device '{}' not found", name))?
+            }
+            None => host
+                .default_input_device()
+                .ok_or_else(|| anyhow::anyhow!("No default input device"))?,
+        };
+        
+        log::info!("[Audio] Using input device: {:?}", device.name()?);
 
         let config = device.default_input_config()?;
         log::info!("Audio config: {:?}", config);

@@ -96,6 +96,10 @@ pub struct AudioState {
     pub amplitude: f32,
     /// Smoothing factor (0-1)
     pub smoothing: f32,
+    /// Selected audio input device name
+    pub selected_device: Option<String>,
+    /// List of available audio devices
+    pub available_devices: Vec<String>,
 }
 
 /// NDI output state
@@ -151,6 +155,16 @@ pub enum OutputCommand {
     StopSyphon,
 }
 
+/// Commands for audio control
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioCommand {
+    None,
+    RefreshDevices,
+    SelectDevice(String),
+    Start,
+    Stop,
+}
+
 /// Shared state accessible from multiple threads
 #[derive(Debug)]
 pub struct SharedState {
@@ -169,6 +183,7 @@ pub struct SharedState {
 
     // Audio analysis
     pub audio: AudioState,
+    pub audio_command: AudioCommand,
 
     // NDI Output
     pub ndi_output: NdiOutputState,
@@ -230,6 +245,7 @@ impl SharedState {
                 smoothing: 0.5,
                 ..Default::default()
             },
+            audio_command: AudioCommand::None,
 
             ndi_output: NdiOutputState {
                 stream_name: "RustJay Output".to_string(),
