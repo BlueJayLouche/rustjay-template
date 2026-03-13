@@ -2,6 +2,22 @@
 
 A high-performance video processing application built with Rust, wgpu, and egui. Features dual-window architecture (control window + fullscreen output), real-time audio analysis, and support for multiple video input/output sources including NDI and Syphon.
 
+## Quick Start
+
+The easiest way to create a new RustJay project is with the project generator:
+
+```bash
+# Install the project generator
+cargo install rustjay-new
+
+# Create a new project
+rustjay-new my-awesome-vj-app
+
+# Enter the project and run
+cd my-awesome-vj-app
+cargo run
+```
+
 ## Features
 
 - **Dual-Window Architecture**: Control window (1200x800) + Fullscreen output with internal resolution scaling
