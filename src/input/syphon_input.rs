@@ -11,23 +11,38 @@ pub use syphon_core::ServerInfo as SyphonServerInfo;
 /// Syphon input receiver using syphon-wgpu integration
 pub struct SyphonInputReceiver {
     #[cfg(target_os = "macos")]
-    client: Option<syphon_wgpu::SyphonWgpuInput>,
+    inner: syphon_wgpu::SyphonWgpuInput,
     server_name: Option<String>,
     resolution: (u32, u32),
-    device: Option<Arc<wgpu::Device>>,
-    queue: Option<Arc<wgpu::Queue>>,
 }
 
 impl SyphonInputReceiver {
     /// Create a new Syphon input receiver
     pub fn new() -> Self {
-        Self {
-            #[cfg(target_os = "macos")]
-            client: None,
-            server_name: None,
-            resolution: (1920, 1080),
-            device: None,
-            queue: None,
+        #[cfg(target_os = "macos")]
+        {
+            // Create a dummy device/queue - will be properly initialized later
+            // We need to create these for the API, but they're not actually used
+            // until receive_texture is called
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .expect("Failed to create adapter for Syphon");
+            let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("Failed to create device for Syphon");
+            
+            Self {
+                inner: syphon_wgpu::SyphonWgpuInput::new(&device, &queue),
+                server_name: None,
+                resolution: (1920, 1080),
+            }
+        }
+        
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self {
+                server_name: None,
+                resolution: (1920, 1080),
+            }
         }
     }
 
@@ -36,10 +51,12 @@ impl SyphonInputReceiver {
         syphon_core::is_available()
     }
 
-    /// Initialize with wgpu device and queue
+    /// Initialize with wgpu device and queue (required before connect)
     pub fn initialize(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        self.device = Some(Arc::new(device.clone()));
-        self.queue = Some(Arc::new(queue.clone()));
+        #[cfg(target_os = "macos")]
+        {
+            self.inner = syphon_wgpu::SyphonWgpuInput::new(device, queue);
+        }
     }
 
     /// Connect to a Syphon server by name
@@ -54,15 +71,8 @@ impl SyphonInputReceiver {
 
         #[cfg(target_os = "macos")]
         {
-            let (device, queue) = self.device.as_ref()
-                .and_then(|d| self.queue.as_ref().map(|q| (d, q)))
-                .ok_or_else(|| anyhow::anyhow!("SyphonInputReceiver not initialized"))?;
-
-            let mut client = syphon_wgpu::SyphonWgpuInput::new(device, queue);
-            client.connect(&server_name)
+            self.inner.connect(&server_name)
                 .map_err(|e| anyhow::anyhow!("Failed to connect: {:?}", e))?;
-
-            self.client = Some(client);
         }
 
         self.server_name = Some(server_name);
@@ -70,14 +80,16 @@ impl SyphonInputReceiver {
     }
 
     /// Try to receive a texture frame (zero-copy)
-    pub fn try_receive_texture(&mut self) -> Option<wgpu::Texture> {
+    /// 
+    /// NOTE: The new API requires device/queue to be passed here
+    pub fn try_receive_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Option<wgpu::Texture> {
         #[cfg(target_os = "macos")]
         {
-            let client = self.client.as_mut()?;
-            let device = self.device.as_ref()?;
-            let queue = self.queue.as_ref()?;
-
-            if let Some(texture) = client.receive_texture(device, queue) {
+            if let Some(texture) = self.inner.receive_texture(device, queue) {
                 self.resolution = (texture.width(), texture.height());
                 return Some(texture);
             }
@@ -90,7 +102,7 @@ impl SyphonInputReceiver {
     pub fn disconnect(&mut self) {
         #[cfg(target_os = "macos")]
         {
-            self.client = None;
+            self.inner.disconnect();
         }
         self.server_name = None;
     }
@@ -99,7 +111,7 @@ impl SyphonInputReceiver {
     pub fn is_connected(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            self.client.as_ref().map_or(false, |c| c.is_connected())
+            self.inner.is_connected()
         }
         #[cfg(not(target_os = "macos"))]
         {

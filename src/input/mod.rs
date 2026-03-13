@@ -116,7 +116,12 @@ impl InputManager {
     pub fn webcam_devices(&mut self) -> &[String] {
         #[cfg(feature = "webcam")]
         if self.webcam_devices.is_empty() {
+            log::info!("[InputManager] Discovering webcam devices...");
             self.webcam_devices = list_cameras();
+            log::info!("[InputManager] Found {} webcam device(s)", self.webcam_devices.len());
+            for device in &self.webcam_devices {
+                log::info!("  - {}", device);
+            }
         }
         &self.webcam_devices
     }
@@ -124,7 +129,12 @@ impl InputManager {
     /// Get list of available NDI sources
     pub fn ndi_sources(&mut self) -> &[String] {
         if self.ndi_sources.is_empty() {
+            log::info!("[InputManager] Discovering NDI sources...");
             self.ndi_sources = list_ndi_sources(2000);
+            log::info!("[InputManager] Found {} NDI source(s)", self.ndi_sources.len());
+            for source in &self.ndi_sources {
+                log::info!("  - {}", source);
+            }
         }
         &self.ndi_sources
     }
@@ -133,8 +143,13 @@ impl InputManager {
     #[cfg(target_os = "macos")]
     pub fn syphon_servers(&mut self) -> &[SyphonServerInfo] {
         if self.syphon_servers.is_empty() {
+            log::info!("[InputManager] Discovering Syphon servers...");
             let discovery = syphon_input::SyphonDiscovery::new();
             self.syphon_servers = discovery.discover_servers();
+            log::info!("[InputManager] Found {} Syphon server(s)", self.syphon_servers.len());
+            for server in &self.syphon_servers {
+                log::info!("  - {} (app: {})", server.name, server.app_name);
+            }
         }
         &self.syphon_servers
     }
@@ -297,8 +312,10 @@ impl InputManager {
 
         // Handle Syphon frames (zero-copy texture path)
         #[cfg(target_os = "macos")]
-        if let Some(ref mut syphon) = self.syphon_receiver {
-            if let Some(texture) = syphon.try_receive_texture() {
+        if let (Some(ref mut syphon), Some(ref device), Some(ref queue)) = 
+            (self.syphon_receiver.as_mut(), self.syphon_device.as_ref(), self.syphon_queue.as_ref()) 
+        {
+            if let Some(texture) = syphon.try_receive_texture(device, queue) {
                 self.resolution = (texture.width(), texture.height());
                 self.syphon_texture = Some(texture);
                 self.has_new_frame = true;
