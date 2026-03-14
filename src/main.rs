@@ -26,11 +26,16 @@ use std::sync::{Arc, Mutex};
 
 mod app;
 mod audio;
+mod config;
 mod core;
 mod engine;
 mod gui;
 mod input;
+mod midi;
+mod osc;
 mod output;
+mod presets;
+mod web;
 
 use core::SharedState;
 
@@ -41,6 +46,8 @@ fn main() -> anyhow::Result<()> {
         .filter_module("wgpu_hal::metal", log::LevelFilter::Warn)
         .filter_module("naga", log::LevelFilter::Warn)
         .filter_module("wgpu_core", log::LevelFilter::Warn)
+        .filter_module("winit", log::LevelFilter::Warn)
+        .filter_module("tracing::span", log::LevelFilter::Warn)
         .init();
 
     info!("Starting RustJay Template v{}", env!("CARGO_PKG_VERSION"));

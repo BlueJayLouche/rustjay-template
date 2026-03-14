@@ -3,6 +3,7 @@
 //! Thread-safe state shared between the GUI, renderer, and input/output threads.
 
 use serde::{Deserialize, Serialize};
+use crate::core::lfo::LfoState;
 
 /// Type of video input source
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,7 +79,7 @@ impl HsbParams {
 }
 
 /// Audio analysis state
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AudioState {
     /// 8-band FFT values (normalized 0-1)
     pub fft: [f32; 8],
@@ -104,6 +105,34 @@ pub struct AudioState {
     pub normalize: bool,
     /// Apply +3dB per octave pink noise compensation
     pub pink_noise_shaping: bool,
+    /// Tap tempo times (for BPM calculation)
+    pub tap_times: Vec<f64>,
+    /// Last tap time (for timeout detection)
+    pub last_tap_time: f64,
+    /// Tap tempo display message
+    pub tap_tempo_info: String,
+}
+
+impl Default for AudioState {
+    fn default() -> Self {
+        Self {
+            fft: [0.0; 8],
+            volume: 0.0,
+            beat: false,
+            bpm: 120.0,
+            beat_phase: 0.0,
+            enabled: true,
+            amplitude: 1.0,
+            smoothing: 0.5,
+            selected_device: None,
+            available_devices: Vec::new(),
+            normalize: true,
+            pink_noise_shaping: false,
+            tap_times: Vec::new(),
+            last_tap_time: 0.0,
+            tap_tempo_info: "Tap to set tempo".to_string(),
+        }
+    }
 }
 
 /// NDI output state
@@ -124,6 +153,39 @@ pub struct SyphonOutputState {
     pub server_name: String,
     /// Whether output is enabled
     pub enabled: bool,
+}
+
+/// Resolution configuration
+#[derive(Debug, Clone)]
+pub struct ResolutionState {
+    /// Internal processing resolution width
+    pub internal_width: u32,
+    /// Internal processing resolution height
+    pub internal_height: u32,
+    /// Input resolution width
+    pub input_width: u32,
+    /// Input resolution height
+    pub input_height: u32,
+}
+
+impl Default for ResolutionState {
+    fn default() -> Self {
+        Self {
+            internal_width: 1920,
+            internal_height: 1080,
+            input_width: 1920,
+            input_height: 1080,
+        }
+    }
+}
+
+/// Performance metrics for output window
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PerformanceMetrics {
+    /// Output window FPS (frames per second)
+    pub fps: f32,
+    /// Frame time in milliseconds
+    pub frame_time_ms: f32,
 }
 
 /// Commands for input changes
@@ -157,6 +219,7 @@ pub enum OutputCommand {
     StartSyphon,
     #[cfg(target_os = "macos")]
     StopSyphon,
+    ResizeOutput,
 }
 
 /// Commands for audio control
@@ -167,6 +230,47 @@ pub enum AudioCommand {
     SelectDevice(String),
     Start,
     Stop,
+}
+
+/// Commands for MIDI control
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MidiCommand {
+    None,
+    RefreshDevices,
+    SelectDevice(String),
+    StartLearn { param_path: String, param_name: String },
+    CancelLearn,
+    ClearMappings,
+}
+
+/// Commands for OSC control
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OscCommand {
+    None,
+    Start,
+    Stop,
+    SetPort(u16),
+    RefreshAddresses,
+}
+
+/// Commands for preset control
+#[derive(Debug, Clone, PartialEq)]
+pub enum PresetCommand {
+    None,
+    Save { name: String },
+    Load(usize),
+    Delete(usize),
+    ApplySlot(usize),
+    Refresh,
+}
+
+/// Commands for web server control
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebCommand {
+    None,
+    Start,
+    Stop,
+    SetPort(u16),
 }
 
 /// Shared state accessible from multiple threads
@@ -188,6 +292,10 @@ pub struct SharedState {
     // Audio analysis
     pub audio: AudioState,
     pub audio_command: AudioCommand,
+    pub audio_routing: crate::audio::routing::AudioRoutingState,
+    
+    // LFO modulation
+    pub lfo: LfoState,
 
     // NDI Output
     pub ndi_output: NdiOutputState,
@@ -197,12 +305,39 @@ pub struct SharedState {
     #[cfg(target_os = "macos")]
     pub syphon_output: SyphonOutputState,
 
+    // Resolution settings
+    pub resolution: ResolutionState,
+
+    // Performance metrics (output FPS)
+    pub performance: PerformanceMetrics,
+
     // UI state
     pub show_preview: bool,
     pub ui_scale: f32,
 
     // Current GUI tab
     pub current_tab: GuiTab,
+    
+    // MIDI commands
+    pub midi_command: MidiCommand,
+    
+    // OSC commands
+    pub osc_command: OscCommand,
+    
+    // OSC state (for GUI display)
+    pub osc_enabled: bool,
+    pub osc_port: u16,
+    
+    // Preset commands
+    pub preset_command: PresetCommand,
+    
+    // Settings save request flag
+    pub save_settings_requested: bool,
+    
+    // Web server
+    pub web_command: WebCommand,
+    pub web_enabled: bool,
+    pub web_port: u16,
 }
 
 /// GUI tab selection
@@ -213,6 +348,10 @@ pub enum GuiTab {
     Color,
     Audio,
     Output,
+    Presets,
+    Midi,
+    Osc,
+    Web,
     Settings,
 }
 
@@ -224,6 +363,10 @@ impl GuiTab {
             GuiTab::Color => "Color",
             GuiTab::Audio => "Audio",
             GuiTab::Output => "Output",
+            GuiTab::Presets => "Presets",
+            GuiTab::Midi => "MIDI",
+            GuiTab::Osc => "OSC",
+            GuiTab::Web => "Web",
             GuiTab::Settings => "Settings",
         }
     }
@@ -252,6 +395,7 @@ impl SharedState {
                 ..Default::default()
             },
             audio_command: AudioCommand::None,
+            audio_routing: crate::audio::routing::AudioRoutingState::new(),
 
             ndi_output: NdiOutputState {
                 stream_name: "RustJay Output".to_string(),
@@ -266,10 +410,26 @@ impl SharedState {
                 enabled: false,
             },
 
+            resolution: ResolutionState::default(),
+            performance: PerformanceMetrics::default(),
+
             show_preview: true,
             ui_scale: 1.0,
 
             current_tab: GuiTab::Input,
+            
+            midi_command: MidiCommand::None,
+            osc_command: OscCommand::None,
+            osc_enabled: false,
+            osc_port: 9000,
+            preset_command: PresetCommand::None,
+            save_settings_requested: false,
+            
+            web_command: WebCommand::None,
+            web_enabled: false,
+            web_port: 8080,
+            
+            lfo: LfoState::new(),
         }
     }
 

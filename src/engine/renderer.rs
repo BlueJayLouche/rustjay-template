@@ -65,6 +65,11 @@ pub struct WgpuEngine {
     // Frame counter
     frame_count: u64,
 
+    // FPS tracking
+    fps_last_time: std::time::Instant,
+    fps_frame_count: u32,
+    fps_current: f32,
+
     // Output manager (NDI, Syphon)
     output_manager: OutputManager,
 }
@@ -251,6 +256,9 @@ impl WgpuEngine {
             vertex_buffer,
             hsb_uniform_buffer,
             frame_count: 0,
+            fps_last_time: std::time::Instant::now(),
+            fps_frame_count: 0,
+            fps_current: 0.0,
             output_manager: OutputManager::new(),
         })
     }
@@ -302,10 +310,29 @@ impl WgpuEngine {
 
     /// Render a frame
     pub fn render(&mut self) {
-        // Get current HSB parameters from shared state
+        // Get current HSB parameters and apply modulations
         let (hsb_params, color_enabled) = {
             let state = self.shared_state.lock().unwrap();
-            (state.hsb_params, state.color_enabled)
+            
+            // Start with base values
+            let base_hue = state.audio_routing.base_hue;
+            let base_sat = state.audio_routing.base_saturation;
+            let base_bright = state.audio_routing.base_brightness;
+            
+            // Apply audio routing modulation
+            let (mut hue, mut sat, mut bright) = if state.audio_routing.enabled {
+                state.audio_routing.matrix.apply_to_hsb(base_hue, base_sat, base_bright)
+            } else {
+                (base_hue, base_sat, base_bright)
+            };
+            
+            // Apply LFO modulation (additive)
+            let (hue_mod, sat_mod, bright_mod) = state.lfo.bank.get_hsb_modulations();
+            hue = (hue + hue_mod * 90.0).clamp(-180.0, 180.0);
+            sat = (sat + sat_mod).clamp(0.0, 2.0);
+            bright = (bright + bright_mod).clamp(0.0, 2.0);
+            
+            (HsbParams { hue_shift: hue, saturation: sat, brightness: bright }, state.color_enabled)
         };
 
         // Get surface texture
@@ -417,6 +444,25 @@ impl WgpuEngine {
         // Submit to outputs
         self.output_manager
             .submit_frame(&self.render_target.texture, &self.device, &self.queue);
+
+        // Update FPS tracking
+        self.fps_frame_count += 1;
+        let elapsed = self.fps_last_time.elapsed();
+        if elapsed.as_secs_f32() >= 0.5 {
+            self.fps_current = self.fps_frame_count as f32 / elapsed.as_secs_f32();
+            self.fps_frame_count = 0;
+            self.fps_last_time = std::time::Instant::now();
+            
+            // Update shared state with FPS
+            if let Ok(mut state) = self.shared_state.lock() {
+                state.performance.fps = self.fps_current;
+                state.performance.frame_time_ms = if self.fps_current > 0.0 {
+                    1000.0 / self.fps_current
+                } else {
+                    0.0
+                };
+            }
+        }
 
         self.frame_count += 1;
     }

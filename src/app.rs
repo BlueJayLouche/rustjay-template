@@ -3,11 +3,16 @@
 //! Dual-window application handler implementing winit's ApplicationHandler.
 
 use crate::audio::{AudioAnalyzer, list_audio_devices};
-use crate::core::{AudioCommand, InputCommand, InputType, OutputCommand, SharedState};
+use crate::config::{AppSettings, ConfigManager};
+use crate::core::{AudioCommand, InputCommand, InputType, OutputCommand, SharedState, MidiCommand, OscCommand, PresetCommand, WebCommand};
 use crate::engine::WgpuEngine;
 use crate::gui::{ControlGui, ImGuiRenderer};
 use crate::input::InputManager;
+use crate::midi::{MidiManager, list_midi_devices};
+use crate::osc::OscServer;
 use crate::output::{OutputManager};
+use crate::presets::{PresetBank, default_presets_dir};
+use crate::web::{WebServer, WebConfig, WebCommand as WebServerCommand};
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -52,6 +57,22 @@ struct App {
     // Audio analyzer
     audio_analyzer: Option<AudioAnalyzer>,
 
+    // MIDI manager
+    midi_manager: Option<MidiManager>,
+
+    // OSC server
+    osc_server: Option<OscServer>,
+
+    // Preset bank
+    preset_bank: Option<PresetBank>,
+
+    // Web server
+    web_server: Option<WebServer>,
+    web_command_tx: Option<tokio::sync::mpsc::Sender<WebServerCommand>>,
+
+    // Config manager
+    config_manager: ConfigManager,
+
     // Modifier state
     shift_pressed: bool,
     
@@ -61,6 +82,15 @@ struct App {
 
 impl App {
     fn new(shared_state: Arc<std::sync::Mutex<SharedState>>) -> Self {
+        // Load settings and apply to state
+        let config_manager = ConfigManager::new();
+        
+        // Apply loaded settings to shared state
+        if let Ok(mut state) = shared_state.lock() {
+            config_manager.settings.apply_to_state(&mut state);
+            log::info!("Applied saved settings to state");
+        }
+        
         Self {
             shared_state,
             wgpu_instance: None,
@@ -74,6 +104,12 @@ impl App {
             imgui_renderer: None,
             input_manager: None,
             audio_analyzer: None,
+            midi_manager: None,
+            osc_server: None,
+            preset_bank: None,
+            web_server: None,
+            web_command_tx: None,
+            config_manager,
             shift_pressed: false,
             initial_refresh_done: false,
         }
@@ -226,6 +262,25 @@ impl App {
                 let mut state = self.shared_state.lock().unwrap();
                 state.syphon_output.enabled = false;
             }
+            OutputCommand::ResizeOutput => {
+                // Resize output window if needed
+                if let (Some(ref output_window), Some(ref mut engine)) = 
+                    (self.output_window.as_ref(), self.output_engine.as_mut()) 
+                {
+                    let (new_width, new_height) = {
+                        let state = self.shared_state.lock().unwrap();
+                        (state.output_width, state.output_height)
+                    };
+                    
+                    // Resize the wgpu surface
+                    engine.resize(new_width, new_height);
+                    
+                    // Request window resize
+                    let _ = output_window.request_inner_size(winit::dpi::LogicalSize::new(new_width, new_height));
+                    
+                    log::info!("Output resized to {}x{}", new_width, new_height);
+                }
+            }
             _ => {}
         }
     }
@@ -334,6 +389,14 @@ impl App {
         }
     }
 
+    /// Trigger tap tempo from keyboard shortcut
+    fn trigger_tap_tempo(&mut self) {
+        if let Some(ref mut gui) = self.control_gui {
+            gui.handle_tap_tempo();
+            log::info!("Tap tempo triggered via keyboard");
+        }
+    }
+
     /// Update audio analysis
     fn update_audio(&mut self) {
         // Sync settings from shared state TO analyzer
@@ -362,8 +425,32 @@ impl App {
                 state.audio.volume = volume;
                 state.audio.beat = beat;
                 state.audio.beat_phase = phase;
+                
+                // Process audio routing (updates internal smoothed values)
+                // Actual application of modulation happens in render step
+                if state.audio_routing.enabled {
+                    let delta_time = 1.0 / 60.0;
+                    state.audio_routing.matrix.process(&fft, delta_time);
+                }
             }
         }
+    }
+
+    /// Update LFO phases (modulation applied in final composite step)
+    fn update_lfo(&mut self) {
+        // Get current BPM and beat phase from audio state
+        let (bpm, beat_phase) = {
+            let state = self.shared_state.lock().unwrap();
+            (state.audio.bpm, state.audio.beat_phase)
+        };
+        
+        // Assume 60fps for delta time
+        let delta_time = 1.0 / 60.0;
+        
+        let mut state = self.shared_state.lock().unwrap();
+        
+        // Update LFO phases only - don't write to hsb_params here
+        state.lfo.bank.update(bpm, delta_time, beat_phase);
     }
 
     /// Update preview textures for GUI
@@ -392,6 +479,382 @@ impl App {
                     renderer.queue().submit(std::iter::once(encoder.finish()));
                 }
             }
+        }
+    }
+
+    /// Process MIDI commands
+    fn process_midi_commands(&mut self) {
+        let command = {
+            let mut state = self.shared_state.lock().unwrap();
+            std::mem::replace(&mut state.midi_command, MidiCommand::None)
+        };
+
+        match command {
+            MidiCommand::RefreshDevices => {
+                if let Some(ref mut manager) = self.midi_manager {
+                    let devices = manager.refresh_devices();
+                    log::info!("MIDI devices refreshed: {} found", devices.len());
+                }
+            }
+            MidiCommand::SelectDevice(device_name) => {
+                if let Some(ref mut manager) = self.midi_manager {
+                    if let Err(e) = manager.connect(&device_name) {
+                        log::error!("Failed to connect to MIDI device '{}': {}", device_name, e);
+                    }
+                }
+            }
+            MidiCommand::StartLearn { param_path, param_name } => {
+                if let Some(ref mut manager) = self.midi_manager {
+                    manager.start_learn(&param_path, &param_name);
+                }
+            }
+            MidiCommand::CancelLearn => {
+                if let Some(ref mut manager) = self.midi_manager {
+                    manager.cancel_learn();
+                }
+            }
+            MidiCommand::ClearMappings => {
+                if let Some(ref mut manager) = self.midi_manager {
+                    if let Ok(mut state) = manager.state().lock() {
+                        state.mappings.clear();
+                        log::info!("MIDI mappings cleared");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Process OSC commands
+    fn process_osc_commands(&mut self) {
+        let command = {
+            let mut state = self.shared_state.lock().unwrap();
+            std::mem::replace(&mut state.osc_command, OscCommand::None)
+        };
+
+        match command {
+            OscCommand::Start => {
+                if let Some(ref mut server) = self.osc_server {
+                    if let Err(e) = server.start() {
+                        log::error!("Failed to start OSC server: {}", e);
+                    } else {
+                        // Update shared state
+                        if let Ok(mut state) = self.shared_state.lock() {
+                            state.osc_enabled = true;
+                        }
+                        log::info!("OSC server started");
+                    }
+                }
+            }
+            OscCommand::Stop => {
+                if let Some(ref mut server) = self.osc_server {
+                    server.stop();
+                    // Update shared state
+                    if let Ok(mut state) = self.shared_state.lock() {
+                        state.osc_enabled = false;
+                    }
+                    log::info!("OSC server stopped");
+                }
+            }
+            OscCommand::SetPort(port) => {
+                if let Some(ref mut server) = self.osc_server {
+                    // Stop if running
+                    server.stop();
+                    // Create new server with new port
+                    let mut new_server = OscServer::new(port, "/rustjay");
+                    if let Ok(mut state) = new_server.state().lock() {
+                        state.register_default_parameters();
+                    }
+                    *server = new_server;
+                    // Update shared state
+                    if let Ok(mut state) = self.shared_state.lock() {
+                        state.osc_port = port;
+                        state.osc_enabled = false; // Reset to stopped
+                    }
+                    log::info!("OSC server port changed to {}", port);
+                }
+            }
+            OscCommand::RefreshAddresses => {
+                if let Some(ref mut server) = self.osc_server {
+                    if let Ok(mut state) = server.state().lock() {
+                        state.register_default_parameters();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Process preset commands
+    fn process_preset_commands(&mut self) {
+        let command = {
+            let mut state = self.shared_state.lock().unwrap();
+            std::mem::replace(&mut state.preset_command, PresetCommand::None)
+        };
+
+        match command {
+            PresetCommand::Save { name } => {
+                if let Some(ref mut bank) = self.preset_bank {
+                    let state = self.shared_state.lock().unwrap();
+                    let preset = crate::presets::Preset::from_state(&name, &state);
+                    match bank.add_preset(preset) {
+                        Ok(index) => log::info!("Saved preset '{}' at index {}", name, index),
+                        Err(e) => log::error!("Failed to save preset: {}", e),
+                    }
+                }
+            }
+            PresetCommand::Load(index) => {
+                if let Some(ref mut bank) = self.preset_bank {
+                    let mut state = self.shared_state.lock().unwrap();
+                    if let Err(e) = bank.apply_preset(index, &mut state) {
+                        log::error!("Failed to load preset: {}", e);
+                    }
+                }
+            }
+            PresetCommand::Delete(index) => {
+                if let Some(ref mut bank) = self.preset_bank {
+                    if let Err(e) = bank.delete_preset(index) {
+                        log::error!("Failed to delete preset: {}", e);
+                    }
+                }
+            }
+            PresetCommand::ApplySlot(slot) => {
+                if let Some(ref mut bank) = self.preset_bank {
+                    let mut state = self.shared_state.lock().unwrap();
+                    if let Err(e) = bank.apply_slot(slot, &mut state) {
+                        log::warn!("Failed to apply preset slot {}: {}", slot, e);
+                    }
+                }
+            }
+            PresetCommand::Refresh => {
+                if let Some(ref mut bank) = self.preset_bank {
+                    if let Err(e) = bank.refresh() {
+                        log::error!("Failed to refresh presets: {}", e);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Process web server commands
+    fn process_web_commands(&mut self) {
+        let command = {
+            let mut state = self.shared_state.lock().unwrap();
+            std::mem::replace(&mut state.web_command, WebCommand::None)
+        };
+
+        match command {
+            WebCommand::Start => {
+                if let Some(ref mut server) = self.web_server {
+                    if let Err(e) = server.start() {
+                        log::error!("Failed to start web server: {}", e);
+                    } else {
+                        if let Ok(mut state) = self.shared_state.lock() {
+                            state.web_enabled = true;
+                        }
+                        log::info!("Web server started at {}", server.get_url());
+                    }
+                }
+            }
+            WebCommand::Stop => {
+                if let Some(ref mut server) = self.web_server {
+                    server.stop();
+                    if let Ok(mut state) = self.shared_state.lock() {
+                        state.web_enabled = false;
+                    }
+                    log::info!("Web server stopped");
+                }
+            }
+            WebCommand::SetPort(port) => {
+                if let Some(ref mut server) = self.web_server {
+                    server.stop();
+                    // Create new server with new port
+                    let config = WebConfig {
+                        port,
+                        app_name: "rustjay".to_string(),
+                        enabled: false,
+                    };
+                    let (new_server, cmd_tx) = WebServer::new(config);
+                    *server = new_server;
+                    self.web_command_tx = Some(cmd_tx);
+                    if let Ok(mut state) = self.shared_state.lock() {
+                        state.web_port = port;
+                        state.web_enabled = false;
+                    }
+                    log::info!("Web server port changed to {}", port);
+                }
+            }
+            _ => {}
+        }
+        
+        // Process commands from web clients
+        if let Some(ref mut server) = self.web_server {
+            while let Ok(cmd) = server.command_rx.try_recv() {
+                match cmd {
+                    WebServerCommand::Set { id, value } => {
+                        // Apply the parameter change
+                        if let Ok(mut state) = self.shared_state.lock() {
+                            match id.as_str() {
+                                "color/hue_shift" => {
+                                    state.hsb_params.hue_shift = value.clamp(-180.0, 180.0);
+                                    let (h, s, b) = (state.hsb_params.hue_shift, state.hsb_params.saturation, state.hsb_params.brightness);
+                                    state.audio_routing.update_base_values(h, s, b);
+                                }
+                                "color/saturation" => {
+                                    state.hsb_params.saturation = value.clamp(0.0, 2.0);
+                                    let (h, s, b) = (state.hsb_params.hue_shift, state.hsb_params.saturation, state.hsb_params.brightness);
+                                    state.audio_routing.update_base_values(h, s, b);
+                                }
+                                "color/brightness" => {
+                                    state.hsb_params.brightness = value.clamp(0.0, 2.0);
+                                    let (h, s, b) = (state.hsb_params.hue_shift, state.hsb_params.saturation, state.hsb_params.brightness);
+                                    state.audio_routing.update_base_values(h, s, b);
+                                }
+                                "color/enabled" => state.color_enabled = value > 0.5,
+                                "audio/amplitude" => state.audio.amplitude = value.clamp(0.0, 5.0),
+                                "audio/smoothing" => state.audio.smoothing = value.clamp(0.0, 1.0),
+                                "audio/enabled" => state.audio.enabled = value > 0.5,
+                                "audio/normalize" => state.audio.normalize = value > 0.5,
+                                "audio/pink_noise" => state.audio.pink_noise_shaping = value > 0.5,
+                                "output/fullscreen" => {
+                                    if value > 0.5 && !state.output_fullscreen {
+                                        state.output_fullscreen = true;
+                                    } else if value <= 0.5 && state.output_fullscreen {
+                                        state.output_fullscreen = false;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Update web server with current state
+    fn update_web(&mut self) {
+        if let Some(ref mut server) = self.web_server {
+            if !server.is_running() {
+                return;
+            }
+            
+            // Sync current parameter values to web server
+            if let Ok(state) = self.shared_state.lock() {
+                server.update_parameter("color/hue_shift", state.hsb_params.hue_shift);
+                server.update_parameter("color/saturation", state.hsb_params.saturation);
+                server.update_parameter("color/brightness", state.hsb_params.brightness);
+                server.update_parameter("color/enabled", if state.color_enabled { 1.0 } else { 0.0 });
+                server.update_parameter("audio/amplitude", state.audio.amplitude);
+                server.update_parameter("audio/smoothing", state.audio.smoothing);
+                server.update_parameter("audio/enabled", if state.audio.enabled { 1.0 } else { 0.0 });
+                server.update_parameter("audio/normalize", if state.audio.normalize { 1.0 } else { 0.0 });
+                server.update_parameter("audio/pink_noise", if state.audio.pink_noise_shaping { 1.0 } else { 0.0 });
+                server.update_parameter("output/fullscreen", if state.output_fullscreen { 1.0 } else { 0.0 });
+            }
+        }
+    }
+
+    /// Update MIDI - apply mapped values to state (only when changed)
+    fn update_midi(&mut self) {
+        if let Some(ref manager) = self.midi_manager {
+            // Collect only dirty values
+            let mut dirty_values: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+            
+            {
+                let midi_state_arc = manager.state();
+                let mut midi_state = midi_state_arc.lock().unwrap();
+                
+                for mapping in &mut midi_state.mappings {
+                    if mapping.is_dirty() {
+                        let value = mapping.get_scaled_value();
+                        dirty_values.insert(mapping.param_path.clone(), value);
+                    }
+                }
+            }
+            
+            // Now apply to shared state only if there are dirty values
+            if !dirty_values.is_empty() {
+                if let Ok(mut shared) = self.shared_state.lock() {
+                    if let Some(&v) = dirty_values.get("color/hue_shift") {
+                        shared.hsb_params.hue_shift = v.clamp(-180.0, 180.0);
+                    }
+                    if let Some(&v) = dirty_values.get("color/saturation") {
+                        shared.hsb_params.saturation = v.clamp(0.0, 2.0);
+                    }
+                    if let Some(&v) = dirty_values.get("color/brightness") {
+                        shared.hsb_params.brightness = v.clamp(0.0, 2.0);
+                    }
+                    if let Some(&v) = dirty_values.get("audio/amplitude") {
+                        shared.audio.amplitude = v.clamp(0.0, 5.0);
+                    }
+                    if let Some(&v) = dirty_values.get("audio/smoothing") {
+                        shared.audio.smoothing = v.clamp(0.0, 1.0);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Update OSC - apply received values to state (only when changed)
+    fn update_osc(&mut self) {
+        if let Some(ref server) = self.osc_server {
+            // Collect only dirty values
+            let (hue_shift, saturation, brightness, color_enabled, amplitude, smoothing) = {
+                if let Ok(mut osc_state) = server.state().lock() {
+                    (
+                        osc_state.get_value_if_dirty("/color/hue_shift"),
+                        osc_state.get_value_if_dirty("/color/saturation"),
+                        osc_state.get_value_if_dirty("/color/brightness"),
+                        osc_state.get_value_if_dirty("/color/enabled"),
+                        osc_state.get_value_if_dirty("/audio/amplitude"),
+                        osc_state.get_value_if_dirty("/audio/smoothing"),
+                    )
+                } else {
+                    (None, None, None, None, None, None)
+                }
+            };
+            
+            // Apply to shared state only if there are changes
+            if hue_shift.is_some() || saturation.is_some() || brightness.is_some() || 
+               color_enabled.is_some() || amplitude.is_some() || smoothing.is_some() {
+                if let Ok(mut shared) = self.shared_state.lock() {
+                    if let Some(v) = hue_shift {
+                        shared.hsb_params.hue_shift = v.clamp(-180.0, 180.0);
+                    }
+                    if let Some(v) = saturation {
+                        shared.hsb_params.saturation = v.clamp(0.0, 2.0);
+                    }
+                    if let Some(v) = brightness {
+                        shared.hsb_params.brightness = v.clamp(0.0, 2.0);
+                    }
+                    if let Some(v) = color_enabled {
+                        shared.color_enabled = v > 0.5;
+                    }
+                    if let Some(v) = amplitude {
+                        shared.audio.amplitude = v.clamp(0.0, 5.0);
+                    }
+                    if let Some(v) = smoothing {
+                        shared.audio.smoothing = v.clamp(0.0, 1.0);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Save settings on exit
+    fn save_settings(&mut self) {
+        // Update settings from current state
+        if let Ok(state) = self.shared_state.lock() {
+            self.config_manager.settings = AppSettings::from_state(&state);
+        }
+        
+        // Save to disk
+        if let Err(e) = self.config_manager.save() {
+            log::error!("Failed to save settings: {}", e);
+        } else {
+            log::info!("Settings saved");
         }
     }
 }
@@ -520,6 +983,7 @@ impl ApplicationHandler for App {
             if window_id == output_window.id() {
                 match event {
                     WindowEvent::CloseRequested => {
+                        self.save_settings();
                         event_loop.exit();
                     }
                     WindowEvent::CursorEntered { .. } => {
@@ -538,12 +1002,80 @@ impl ApplicationHandler for App {
                         if event.state == winit::event::ElementState::Pressed {
                             match &event.logical_key {
                                 winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                                    self.save_settings();
                                     event_loop.exit();
                                 }
                                 winit::keyboard::Key::Character(ch) => {
                                     let key = ch.to_lowercase();
                                     if self.shift_pressed && key == "f" {
                                         self.toggle_fullscreen();
+                                    }
+                                    if self.shift_pressed && key == "t" {
+                                        self.trigger_tap_tempo();
+                                    }
+                                }
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::F1) => {
+                                    if self.shift_pressed {
+                                        if let Some(ref mut bank) = self.preset_bank {
+                                            let mut state = self.shared_state.lock().unwrap();
+                                            let _ = bank.apply_slot(1, &mut state);
+                                        }
+                                    }
+                                }
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::F2) => {
+                                    if self.shift_pressed {
+                                        if let Some(ref mut bank) = self.preset_bank {
+                                            let mut state = self.shared_state.lock().unwrap();
+                                            let _ = bank.apply_slot(2, &mut state);
+                                        }
+                                    }
+                                }
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::F3) => {
+                                    if self.shift_pressed {
+                                        if let Some(ref mut bank) = self.preset_bank {
+                                            let mut state = self.shared_state.lock().unwrap();
+                                            let _ = bank.apply_slot(3, &mut state);
+                                        }
+                                    }
+                                }
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::F4) => {
+                                    if self.shift_pressed {
+                                        if let Some(ref mut bank) = self.preset_bank {
+                                            let mut state = self.shared_state.lock().unwrap();
+                                            let _ = bank.apply_slot(4, &mut state);
+                                        }
+                                    }
+                                }
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::F5) => {
+                                    if self.shift_pressed {
+                                        if let Some(ref mut bank) = self.preset_bank {
+                                            let mut state = self.shared_state.lock().unwrap();
+                                            let _ = bank.apply_slot(5, &mut state);
+                                        }
+                                    }
+                                }
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::F6) => {
+                                    if self.shift_pressed {
+                                        if let Some(ref mut bank) = self.preset_bank {
+                                            let mut state = self.shared_state.lock().unwrap();
+                                            let _ = bank.apply_slot(6, &mut state);
+                                        }
+                                    }
+                                }
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::F7) => {
+                                    if self.shift_pressed {
+                                        if let Some(ref mut bank) = self.preset_bank {
+                                            let mut state = self.shared_state.lock().unwrap();
+                                            let _ = bank.apply_slot(7, &mut state);
+                                        }
+                                    }
+                                }
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::F8) => {
+                                    if self.shift_pressed {
+                                        if let Some(ref mut bank) = self.preset_bank {
+                                            let mut state = self.shared_state.lock().unwrap();
+                                            let _ = bank.apply_slot(8, &mut state);
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -577,6 +1109,7 @@ impl ApplicationHandler for App {
 
                 match event {
                     WindowEvent::CloseRequested => {
+                        self.save_settings();
                         event_loop.exit();
                     }
                     WindowEvent::Resized(size) => {
@@ -651,15 +1184,96 @@ impl ApplicationHandler for App {
             self.audio_analyzer = Some(analyzer);
         }
 
+        // Initialize MIDI manager
+        if self.midi_manager.is_none() {
+            let midi_state = std::sync::Arc::new(std::sync::Mutex::new(crate::midi::MidiState::default()));
+            match MidiManager::new(midi_state) {
+                Ok(mut manager) => {
+                    // Refresh device list
+                    manager.refresh_devices();
+                    self.midi_manager = Some(manager);
+                    log::info!("MIDI manager initialized");
+                }
+                Err(e) => {
+                    log::warn!("Failed to initialize MIDI manager: {}", e);
+                }
+            }
+        }
+
+        // Initialize OSC server
+        if self.osc_server.is_none() {
+            let mut server = OscServer::new(9000, "/rustjay");
+            // Register default parameters
+            if let Ok(mut state) = server.state().lock() {
+                state.register_default_parameters();
+            }
+            self.osc_server = Some(server);
+            log::info!("OSC server initialized");
+        }
+
+        // Initialize preset bank
+        if self.preset_bank.is_none() {
+            match default_presets_dir() {
+                Ok(presets_dir) => {
+                    let bank = PresetBank::new(presets_dir);
+                    self.preset_bank = Some(bank);
+                    log::info!("Preset bank initialized");
+                }
+                Err(e) => {
+                    log::warn!("Failed to initialize preset bank: {}", e);
+                }
+            }
+        }
+
+        // Initialize web server
+        if self.web_server.is_none() {
+            let port = {
+                let state = self.shared_state.lock().unwrap();
+                state.web_port
+            };
+            let config = WebConfig {
+                port,
+                app_name: "rustjay".to_string(),
+                enabled: false,
+            };
+            let (mut server, cmd_tx) = WebServer::new(config);
+            server.register_default_parameters();
+            self.web_server = Some(server);
+            self.web_command_tx = Some(cmd_tx);
+            log::info!("Web server initialized on port {}", port);
+        }
+
         // Process commands
         self.process_input_commands();
         self.process_output_commands();
         self.process_audio_commands();
+        self.process_midi_commands();
+        self.process_osc_commands();
+        self.process_preset_commands();
+        self.process_web_commands();
 
         // Update systems
         self.update_input();
         self.update_audio();
-
+        self.update_lfo();
+        self.update_midi();
+        self.update_osc();
+        self.update_web();
+        
+        // Check for settings save request
+        let should_save = {
+            let mut state = self.shared_state.lock().unwrap();
+            if state.save_settings_requested {
+                state.save_settings_requested = false;
+                true
+            } else {
+                false
+            }
+        };
+        if should_save {
+            self.save_settings();
+        }
+        
         // Request redraws
         if let Some(ref window) = self.output_window {
             window.request_redraw();

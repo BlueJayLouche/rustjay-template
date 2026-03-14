@@ -2,6 +2,8 @@
 //!
 //! Real-time audio analysis with FFT and beat detection.
 
+pub mod routing;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use realfft::{RealFftPlanner, RealToComplex};
 use std::sync::atomic::{AtomicBool, Ordering};
