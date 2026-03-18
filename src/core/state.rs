@@ -5,6 +5,15 @@
 use serde::{Deserialize, Serialize};
 use crate::core::lfo::LfoState;
 
+// Command enums live in their home modules; re-export here for backward compatibility.
+pub use crate::audio::AudioCommand;
+pub use crate::input::InputCommand;
+pub use crate::midi::MidiCommand;
+pub use crate::osc::OscCommand;
+pub use crate::output::OutputCommand;
+pub use crate::presets::PresetCommand;
+pub use crate::web::WebControlCommand as WebCommand;
+
 /// Type of video input source
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputType {
@@ -188,90 +197,6 @@ pub struct PerformanceMetrics {
     pub frame_time_ms: f32,
 }
 
-/// Commands for input changes
-#[derive(Debug, Clone, PartialEq)]
-pub enum InputCommand {
-    None,
-    StartWebcam {
-        device_index: usize,
-        width: u32,
-        height: u32,
-        fps: u32,
-    },
-    StartNdi {
-        source_name: String,
-    },
-    #[cfg(target_os = "macos")]
-    StartSyphon {
-        server_name: String,
-    },
-    StopInput,
-    RefreshDevices,
-}
-
-/// Commands for output control
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputCommand {
-    None,
-    StartNdi,
-    StopNdi,
-    #[cfg(target_os = "macos")]
-    StartSyphon,
-    #[cfg(target_os = "macos")]
-    StopSyphon,
-    ResizeOutput,
-}
-
-/// Commands for audio control
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AudioCommand {
-    None,
-    RefreshDevices,
-    SelectDevice(String),
-    Start,
-    Stop,
-}
-
-/// Commands for MIDI control
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MidiCommand {
-    None,
-    RefreshDevices,
-    SelectDevice(String),
-    StartLearn { param_path: String, param_name: String },
-    CancelLearn,
-    ClearMappings,
-}
-
-/// Commands for OSC control
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OscCommand {
-    None,
-    Start,
-    Stop,
-    SetPort(u16),
-    RefreshAddresses,
-}
-
-/// Commands for preset control
-#[derive(Debug, Clone, PartialEq)]
-pub enum PresetCommand {
-    None,
-    Save { name: String },
-    Load(usize),
-    Delete(usize),
-    ApplySlot(usize),
-    Refresh,
-}
-
-/// Commands for web server control
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WebCommand {
-    None,
-    Start,
-    Stop,
-    SetPort(u16),
-}
 
 /// Shared state accessible from multiple threads
 #[derive(Debug)]

@@ -8,6 +8,19 @@
 
 use std::sync::Arc;
 
+/// Commands for output stream control
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputCommand {
+    None,
+    StartNdi,
+    StopNdi,
+    #[cfg(target_os = "macos")]
+    StartSyphon,
+    #[cfg(target_os = "macos")]
+    StopSyphon,
+    ResizeOutput,
+}
+
 pub mod ndi_output;
 #[cfg(target_os = "macos")]
 pub mod syphon_output;

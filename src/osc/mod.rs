@@ -3,6 +3,16 @@
 //! UDP-based OSC server with auto-generated addresses.
 //! Address format: /[base]/[tab]/[parameter]
 
+/// Commands for OSC server control
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OscCommand {
+    None,
+    Start,
+    Stop,
+    SetPort(u16),
+    RefreshAddresses,
+}
+
 use rosc::{OscPacket, OscMessage, OscType, decoder};
 use std::collections::HashMap;
 use std::net::{UdpSocket, SocketAddrV4, Ipv4Addr};

@@ -10,6 +10,27 @@
 use anyhow::Result;
 use std::sync::mpsc;
 
+/// Commands for changing the active input source
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputCommand {
+    None,
+    StartWebcam {
+        device_index: usize,
+        width: u32,
+        height: u32,
+        fps: u32,
+    },
+    StartNdi {
+        source_name: String,
+    },
+    #[cfg(target_os = "macos")]
+    StartSyphon {
+        server_name: String,
+    },
+    StopInput,
+    RefreshDevices,
+}
+
 pub mod ndi;
 pub use ndi::{list_ndi_sources, NdiReceiver, NdiFrame};
 

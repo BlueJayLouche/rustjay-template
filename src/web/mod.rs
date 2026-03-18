@@ -15,6 +15,15 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 
+/// Commands for web server lifecycle control
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebControlCommand {
+    None,
+    Start,
+    Stop,
+    SetPort(u16),
+}
+
 /// Web server configuration
 #[derive(Debug, Clone)]
 pub struct WebConfig {

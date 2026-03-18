@@ -94,6 +94,30 @@ cargo run
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Module Structure
+
+```
+src/
+├── app/           # Event loop, command dispatch, frame update
+├── audio/
+│   ├── fft.rs     # Lock-free AudioOutput/AudioConfig + real-time FFT
+│   ├── device.rs  # Device enumeration, stream construction (f32/i16/u16)
+│   └── routing.rs # Audio-reactive parameter routing
+├── core/          # SharedState, HsbParams, LFO, vertex types
+├── engine/
+│   ├── pipeline.rs  # HSB render pipeline + bind group layouts
+│   ├── uniforms.rs  # HsbUniforms GPU type
+│   ├── blit.rs      # BlitPipeline (cached — no per-frame allocation)
+│   └── texture.rs   # InputTexture, render target helpers
+├── gui/           # ImGui tabs (input, color, audio, output, presets…)
+├── input/         # Webcam, NDI, Syphon input sources
+├── midi/          # CC mapping with learn system
+├── osc/           # UDP OSC server
+├── output/        # NDI and Syphon output senders
+├── presets/       # Preset save/load/apply
+└── web/           # WebSocket remote control
+```
+
 ### Modulation Architecture
 
 The modulation system uses a **separation of concerns** architecture:

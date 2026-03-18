@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Engine**: Split `renderer.rs` (620 lines) into focused modules:
+  - `engine/pipeline.rs` — HSB render pipeline and bind group layout setup
+  - `engine/uniforms.rs` — `HsbUniforms` GPU type
+  - `engine/blit.rs` — `BlitPipeline` for screen blit (cached at startup)
+- **Audio**: Split `audio/mod.rs` (598 lines) into focused modules:
+  - `audio/fft.rs` — lock-free `AudioOutput`/`AudioConfig` types and real-time FFT processing
+  - `audio/device.rs` — device enumeration and stream construction per sample format
+- **Core**: Moved command enums (`InputCommand`, `AudioCommand`, `OutputCommand`,
+  `MidiCommand`, `OscCommand`, `PresetCommand`, `WebControlCommand`) out of `SharedState`
+  into their respective subsystem modules. Re-exported from `crate::core` for backward
+  compatibility — no call-site changes required.
+- **App**: Added `dispatch_commands()` aggregator replacing 7 individual calls in the event
+  loop. Introduced `lock()` helper to reduce mutex boilerplate in `commands.rs`.
+
+### Fixed
+
+- **Performance**: `blit_to_surface` previously recreated its shader, pipeline, and bind
+  group layout on every frame. `BlitPipeline` now caches these at init — zero GPU object
+  allocation per frame for the blit pass.
+
 ## [0.2.0] - 2026-03-14
 
 ### Added

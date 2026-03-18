@@ -325,14 +325,8 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // Process commands
-        self.process_input_commands();
-        self.process_output_commands();
-        self.process_audio_commands();
-        self.process_midi_commands();
-        self.process_osc_commands();
-        self.process_preset_commands();
-        self.process_web_commands();
+        // Process all pending subsystem commands
+        self.dispatch_commands();
 
         // Update systems
         self.update_input();

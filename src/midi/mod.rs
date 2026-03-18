@@ -6,6 +6,17 @@ use midir::{Ignore, MidiInput, MidiInputConnection, MidiInputPort};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// Commands for MIDI device and learn-mode control
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MidiCommand {
+    None,
+    RefreshDevices,
+    SelectDevice(String),
+    StartLearn { param_path: String, param_name: String },
+    CancelLearn,
+    ClearMappings,
+}
+
 /// A mapped MIDI parameter
 #[derive(Debug, Clone)]
 pub struct MidiMapping {

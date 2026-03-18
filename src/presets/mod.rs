@@ -4,6 +4,17 @@
 
 use crate::core::{HsbParams, SharedState};
 use serde::{Deserialize, Serialize};
+
+/// Commands for preset management
+#[derive(Debug, Clone, PartialEq)]
+pub enum PresetCommand {
+    None,
+    Save { name: String },
+    Load(usize),
+    Delete(usize),
+    ApplySlot(usize),
+    Refresh,
+}
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
