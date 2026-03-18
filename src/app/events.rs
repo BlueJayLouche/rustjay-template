@@ -126,12 +126,17 @@ impl ApplicationHandler for App {
 
                                 log::info!("Created preview textures");
 
-                                // Initial device refresh
-                                if let Some(ref mut manager) = self.input_manager {
-                                    gui.refresh_devices(manager);
-                                }
-
                                 self.control_gui = Some(gui);
+
+                                // Queue an initial device refresh to run in about_to_wait()
+                                // rather than calling refresh_devices() here. Running it
+                                // inside resumed() would block NDI discovery for ~2 s and,
+                                // before the syphon crate fix, also spun the NSRunLoop
+                                // causing winit's re-entrancy guard to panic.
+                                {
+                                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                                    state.input_command = crate::core::InputCommand::RefreshDevices;
+                                }
                                 self.imgui_renderer = Some(renderer);
                             }
                             Err(err) => {
