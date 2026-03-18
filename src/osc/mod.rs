@@ -264,7 +264,7 @@ impl OscServer {
         }
         
         let port = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.port
         };
         

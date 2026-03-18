@@ -3,8 +3,23 @@ fn main() {
     #[cfg(target_os = "macos")]
     {
         // ===== Syphon Framework =====
-        // The framework is at: /Users/alpha/Developer/rust/crates/syphon/syphon-lib/Syphon.framework
-        let syphon_framework_dir = "/Users/alpha/Developer/rust/crates/syphon/syphon-lib";
+        // Resolve framework path relative to this build script so it works on any machine.
+        let syphon_framework_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()  // workspace or parent dir
+            .and_then(|p| {
+                // Try sibling layout: <root>/crates/syphon/syphon-lib
+                let candidate = p.join("crates/syphon/syphon-lib");
+                if candidate.join("Syphon.framework").exists() { Some(candidate) } else { None }
+            })
+            .or_else(|| {
+                // Fallback: absolute path set via env var SYPHON_FRAMEWORK_DIR
+                std::env::var("SYPHON_FRAMEWORK_DIR").ok().map(std::path::PathBuf::from)
+            })
+            .expect(
+                "Syphon.framework not found. Set SYPHON_FRAMEWORK_DIR to the directory \
+                 containing Syphon.framework, or place it at <workspace>/../crates/syphon/syphon-lib/"
+            );
+        let syphon_framework_dir = syphon_framework_dir.to_string_lossy().into_owned();
         
         // Add framework search path
         println!("cargo:rustc-link-arg=-F{}", syphon_framework_dir);

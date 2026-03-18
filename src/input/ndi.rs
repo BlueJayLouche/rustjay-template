@@ -31,6 +31,8 @@ pub struct NdiReceiver {
     frame_tx: Sender<NdiFrame>,
     frame_rx: CrossbeamReceiver<NdiFrame>,
     running: Arc<AtomicBool>,
+    /// Set when the source disappears (not found, or too many consecutive errors)
+    source_lost: Arc<AtomicBool>,
     resolution: (u32, u32),
 }
 
@@ -38,15 +40,21 @@ impl NdiReceiver {
     /// Create a new NDI receiver (does not start receiving yet)
     pub fn new(source_name: impl Into<String>) -> Self {
         let (frame_tx, frame_rx) = channel::bounded(5);
-        
+
         Self {
             source_name: source_name.into(),
             receiver_thread: None,
             frame_tx,
             frame_rx,
             running: Arc::new(AtomicBool::new(false)),
+            source_lost: Arc::new(AtomicBool::new(false)),
             resolution: (1920, 1080),
         }
+    }
+
+    /// Returns true if the source has been lost (not found or repeated errors)
+    pub fn is_source_lost(&self) -> bool {
+        self.source_lost.load(Ordering::Relaxed)
     }
 
     /// Start receiving from the NDI source
@@ -62,7 +70,9 @@ impl NdiReceiver {
         let source_name = self.source_name.clone();
         let frame_tx = self.frame_tx.clone();
         let running = Arc::clone(&self.running);
+        let source_lost = Arc::clone(&self.source_lost);
         running.store(true, Ordering::SeqCst);
+        source_lost.store(false, Ordering::Relaxed);
 
         let thread_handle = thread::spawn(move || {
             // Find the source
@@ -107,7 +117,8 @@ impl NdiReceiver {
             let source = match found_source {
                 Some(s) => s,
                 None => {
-                    log::error!("[NDI] Could not find source: {}", source_name);
+                    log::error!("[NDI] Could not find source '{}' within timeout", source_name);
+                    source_lost.store(true, Ordering::Relaxed);
                     return;
                 }
             };
@@ -129,13 +140,15 @@ impl NdiReceiver {
             log::info!("[NDI] Connected to: {}", source_name);
 
             // Receive loop
+            let mut consecutive_errors = 0u32;
             while running.load(Ordering::SeqCst) {
                 match receiver.capture_video_ref(Duration::from_millis(100)) {
                     Ok(Some(video_frame)) => {
+                        consecutive_errors = 0;
                         let width = video_frame.width() as u32;
                         let height = video_frame.height() as u32;
                         let frame_data = video_frame.data();
-                        
+
                         let frame = NdiFrame {
                             width,
                             height,
@@ -147,7 +160,14 @@ impl NdiReceiver {
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        log::error!("[NDI] Frame capture error: {:?}", e);
+                        consecutive_errors += 1;
+                        log::error!("[NDI] Frame capture error ({}/50): {:?}", consecutive_errors, e);
+                        // After ~5s of continuous errors, declare the source lost
+                        if consecutive_errors >= 50 {
+                            log::warn!("[NDI] Source '{}' considered lost after repeated errors", source_name);
+                            source_lost.store(true, Ordering::Relaxed);
+                            break;
+                        }
                         thread::sleep(Duration::from_millis(10));
                     }
                 }

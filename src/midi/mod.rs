@@ -218,18 +218,50 @@ pub struct MidiManager {
     state: Arc<Mutex<MidiState>>,
     input: Option<MidiInput>,
     connection: Option<MidiInputConnection<()>>,
+    /// Throttle the port-availability check to avoid creating a MidiInput every frame
+    last_availability_check: std::time::Instant,
 }
 
 impl MidiManager {
     pub fn new(state: Arc<Mutex<MidiState>>) -> anyhow::Result<Self> {
         let mut input = MidiInput::new("RustJay MIDI")?;
         input.ignore(Ignore::None);
-        
+
         Ok(Self {
             state,
             input: Some(input),
             connection: None,
+            last_availability_check: std::time::Instant::now(),
         })
+    }
+
+    /// Check if the connected device is still available in the port list.
+    /// Only performs the actual check at most once every 3 seconds.
+    /// Returns `Some(false)` when the device has been confirmed missing,
+    /// `Some(true)` when confirmed present, or `None` when the check was skipped.
+    pub fn check_device_available_if_needed(&mut self) -> Option<bool> {
+        if self.last_availability_check.elapsed().as_secs() < 3 {
+            return None;
+        }
+        self.last_availability_check = std::time::Instant::now();
+
+        let device_name = match self.state.lock() {
+            Ok(s) => s.selected_device.clone(),
+            Err(_) => return Some(true),
+        };
+
+        let Some(name) = device_name else {
+            return Some(true); // not connected, nothing to check
+        };
+
+        if let Ok(mut tmp) = MidiInput::new("RustJay MIDI Check") {
+            tmp.ignore(Ignore::None);
+            let available = tmp.ports().iter()
+                .any(|p| tmp.port_name(p).ok().as_deref() == Some(name.as_str()));
+            Some(available)
+        } else {
+            Some(true) // assume present if we can't create a temporary input
+        }
     }
     
     /// Refresh list of available devices

@@ -175,7 +175,7 @@ impl WebServer {
         
         let state = Arc::clone(&self.state);
         let (port, app_name) = {
-            let s = state.lock().unwrap();
+            let s = state.lock().unwrap_or_else(|e| e.into_inner());
             (s.config.port, s.config.app_name.clone())
         };
         
@@ -334,7 +334,7 @@ async fn ws_handler(
 async fn handle_socket(mut socket: WebSocket, state: Arc<Mutex<WebServerState>>) {
     // Get initial parameters
     let params = {
-        let state = state.lock().unwrap();
+        let state = state.lock().unwrap_or_else(|e| e.into_inner());
         state.parameters.values().cloned().collect::<Vec<_>>()
     };
     
@@ -348,7 +348,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<Mutex<WebServerState>>)
     
     // Subscribe to broadcasts
     let mut rx = {
-        state.lock().unwrap().broadcast_tx.subscribe()
+        state.lock().unwrap_or_else(|e| e.into_inner()).broadcast_tx.subscribe()
     };
     
     // Handle messages from client and broadcasts

@@ -284,15 +284,19 @@ fullscreen = false
 ```
 rustjay-template/
 ├── Cargo.toml              # Project dependencies
-├── build.rs                # Build script for framework/library linking
+├── build.rs                # Build script (auto-detects Syphon/NDI paths)
 ├── src/
 │   ├── main.rs             # Application entry point
-│   ├── app.rs              # Main application state machine
+│   ├── app/
+│   │   ├── mod.rs          # App struct, new(), startup, shutdown
+│   │   ├── commands.rs     # Input/audio/MIDI/OSC/web command handlers
+│   │   ├── update.rs       # Per-frame update methods
+│   │   └── events.rs       # winit ApplicationHandler impl
 │   ├── audio/
-│   │   ├── mod.rs          # Audio capture and analysis
+│   │   ├── mod.rs          # Lock-free audio capture and FFT analysis
 │   │   └── routing.rs      # Audio→parameter routing matrix
 │   ├── config/
-│   │   └── mod.rs          # Settings persistence
+│   │   └── mod.rs          # Atomic settings persistence (write-then-rename)
 │   ├── core/
 │   │   ├── mod.rs          # Core types and shared state
 │   │   ├── lfo.rs          # LFO engine and modulation
@@ -303,16 +307,24 @@ rustjay-template/
 │   │   ├── renderer.rs     # Wgpu renderer implementation
 │   │   └── texture.rs      # Texture management
 │   ├── gui/
-│   │   ├── mod.rs          # GUI module
-│   │   ├── gui.rs          # ImGui interface builder
-│   │   └── renderer.rs     # ImGui wgpu renderer
+│   │   ├── mod.rs          # GUI module exports
+│   │   ├── renderer.rs     # ImGui wgpu renderer
+│   │   └── gui/
+│   │       ├── gui.rs      # ControlGui struct, top-level layout
+│   │       ├── tab_input.rs    # Input tab + preview panels
+│   │       ├── tab_color.rs    # Color/HSB tab
+│   │       ├── tab_audio.rs    # Audio tab + routing matrix
+│   │       ├── tab_output.rs   # Output tab
+│   │       ├── tab_settings.rs # Settings + Presets tabs
+│   │       ├── tab_control.rs  # MIDI, OSC, Web tabs
+│   │       └── tab_lfo.rs      # LFO window
 │   ├── input/
 │   │   ├── mod.rs          # Input management
 │   │   ├── webcam.rs       # Webcam input (nokhwa)
-│   │   ├── ndi.rs          # NDI input (grafton-ndi)
-│   │   └── syphon_input.rs # Syphon input (macOS)
+│   │   ├── ndi.rs          # NDI input with source-loss detection
+│   │   └── syphon_input.rs # Syphon input — shares main wgpu device
 │   ├── midi/
-│   │   └── mod.rs          # MIDI input and learn system
+│   │   └── mod.rs          # MIDI input, learn system, device hot-swap
 │   ├── osc/
 │   │   └── mod.rs          # OSC server
 │   ├── output/
@@ -346,7 +358,7 @@ The application uses `Bgra8Unorm` throughout for:
 - Uses `realfft` 3.4 with `RealToComplex` trait for FFT
 - 8-band frequency analysis (20Hz - 16kHz)
 - Beat detection with energy history
-- Thread-safe sharing via Arc<Mutex<>>
+- **Lock-free audio path**: FFT results, volume, and beat state are shared via `AtomicU32`/`AtomicBool` — no mutex on the real-time audio thread
 
 ### LFO System
 
@@ -368,11 +380,14 @@ The application uses `Bgra8Unorm` throughout for:
 
 ### "Library not loaded" errors
 
-If you encounter dyld errors, ensure:
-1. Syphon framework is at `../crates/syphon/syphon-lib/Syphon.framework`
-2. NDI SDK is installed in `/usr/local/lib` or `/Library/NDI SDK for Apple/`
+The build script (`build.rs`) auto-detects Syphon and NDI paths and embeds the correct rpaths in the binary. If you hit a `dyld` error:
 
-The build script automatically sets rpaths for both.
+1. **Syphon**: the script looks for `Syphon.framework` at `<workspace>/../crates/syphon/syphon-lib/`. If your layout differs, set `SYPHON_FRAMEWORK_DIR` to the directory containing the framework before building:
+   ```bash
+   SYPHON_FRAMEWORK_DIR=/path/to/syphon-lib cargo build --release
+   ```
+2. **NDI**: the script checks `/usr/local/lib` and `/Library/NDI SDK for Apple/lib/macOS`. Install the NDI SDK and rebuild.
+3. If you built the binary on another machine and copied it over, it will have the wrong rpath baked in — always rebuild from source on the target machine.
 
 ### No video input
 

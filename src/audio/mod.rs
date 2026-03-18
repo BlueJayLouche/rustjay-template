@@ -6,8 +6,8 @@ pub mod routing;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use realfft::{RealFftPlanner, RealToComplex};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
 
 /// List available audio input devices
 pub fn list_audio_devices() -> Vec<String> {
@@ -27,39 +27,81 @@ pub fn default_audio_device() -> Option<String> {
         .and_then(|d| d.name().ok())
 }
 
+// ---------------------------------------------------------------------------
+// Lock-free audio output (written by real-time callback, read by main thread)
+// ---------------------------------------------------------------------------
+
+struct AudioOutput {
+    fft: [AtomicU32; 8],
+    volume: AtomicU32,
+    /// Set true by callback; atomically swapped false when read by main thread
+    beat: AtomicBool,
+    beat_phase: AtomicU32,
+}
+
+impl AudioOutput {
+    fn new() -> Self {
+        Self {
+            fft: std::array::from_fn(|_| AtomicU32::new(0)),
+            volume: AtomicU32::new(0),
+            beat: AtomicBool::new(false),
+            beat_phase: AtomicU32::new(0),
+        }
+    }
+
+    fn reset(&self) {
+        for f in &self.fft {
+            f.store(0f32.to_bits(), Ordering::Relaxed);
+        }
+        self.volume.store(0f32.to_bits(), Ordering::Relaxed);
+        self.beat.store(false, Ordering::Relaxed);
+        self.beat_phase.store(0f32.to_bits(), Ordering::Relaxed);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lock-free audio config (written by main thread, read by real-time callback)
+// ---------------------------------------------------------------------------
+
+struct AudioConfig {
+    amplitude: AtomicU32,
+    smoothing: AtomicU32,
+    normalize: AtomicBool,
+    pink_noise_shaping: AtomicBool,
+}
+
+impl AudioConfig {
+    fn new() -> Self {
+        Self {
+            amplitude: AtomicU32::new(1.0f32.to_bits()),
+            smoothing: AtomicU32::new(0.5f32.to_bits()),
+            normalize: AtomicBool::new(true),
+            pink_noise_shaping: AtomicBool::new(false),
+        }
+    }
+
+    fn amplitude(&self) -> f32 {
+        f32::from_bits(self.amplitude.load(Ordering::Relaxed))
+    }
+    fn smoothing(&self) -> f32 {
+        f32::from_bits(self.smoothing.load(Ordering::Relaxed))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public AudioAnalyzer
+// ---------------------------------------------------------------------------
+
 /// Audio analyzer running in real-time
 pub struct AudioAnalyzer {
     stream: Option<cpal::Stream>,
     running: Arc<AtomicBool>,
-    shared_data: Arc<Mutex<AudioData>>,
-}
-
-/// Shared audio analysis data
-#[derive(Debug, Clone)]
-struct AudioData {
-    fft: [f32; 8],
-    volume: f32,
-    beat: bool,
-    beat_phase: f32,
-    amplitude: f32,
-    smoothing: f32,
-    normalize: bool,
-    pink_noise_shaping: bool,
-}
-
-impl Default for AudioData {
-    fn default() -> Self {
-        Self {
-            fft: [0.0; 8],
-            volume: 0.0,
-            beat: false,
-            beat_phase: 0.0,
-            amplitude: 1.0,
-            smoothing: 0.5,
-            normalize: true,
-            pink_noise_shaping: false,
-        }
-    }
+    /// Set true by the cpal error callback; checked by main thread for reconnect
+    stream_error: Arc<AtomicBool>,
+    /// Lock-free: written by audio callback, read by main thread
+    output: Arc<AudioOutput>,
+    /// Lock-free: written by main thread, read by audio callback
+    config: Arc<AudioConfig>,
 }
 
 impl AudioAnalyzer {
@@ -68,8 +110,16 @@ impl AudioAnalyzer {
         Self {
             stream: None,
             running: Arc::new(AtomicBool::new(false)),
-            shared_data: Arc::new(Mutex::new(AudioData::default())),
+            stream_error: Arc::new(AtomicBool::new(false)),
+            output: Arc::new(AudioOutput::new()),
+            config: Arc::new(AudioConfig::new()),
         }
+    }
+
+    /// Returns true if the stream encountered an error since the last call
+    /// (atomically clears the flag)
+    pub fn take_stream_error(&self) -> bool {
+        self.stream_error.swap(false, Ordering::Relaxed)
     }
 
     /// Start audio analysis with default device
@@ -80,14 +130,14 @@ impl AudioAnalyzer {
     /// Start audio analysis with specific device (None for default)
     pub fn start_with_device(&mut self, device_name: Option<&str>) -> anyhow::Result<()> {
         log::info!("[Audio] start_with_device called with: {:?}", device_name);
-        
+
         if self.stream.is_some() {
             log::info!("[Audio] Stopping existing stream first");
             self.stop();
         }
 
         let host = cpal::default_host();
-        
+
         // List available devices for debugging
         match host.input_devices() {
             Ok(devices) => {
@@ -100,12 +150,11 @@ impl AudioAnalyzer {
             }
             Err(e) => log::warn!("[Audio] Failed to list input devices: {}", e),
         }
-        
+
         // Select device
         let device = match device_name {
             Some(name) => {
                 log::info!("[Audio] Looking for device: '{}'", name);
-                // Find device by name
                 host.input_devices()?
                     .find(|d| {
                         let dev_name = d.name().ok();
@@ -121,33 +170,32 @@ impl AudioAnalyzer {
                     .ok_or_else(|| anyhow::anyhow!("No default input device"))?
             }
         };
-        
+
         log::info!("[Audio] Selected device: {:?}", device.name()?);
-        
-        // Reset shared data when starting new device
-        if let Ok(mut data) = self.shared_data.lock() {
-            *data = AudioData::default();
-            log::info!("[Audio] Audio data reset");
-        }
+
+        // Reset output data when starting a new device
+        self.output.reset();
 
         let config = device.default_input_config()?;
         log::info!("Audio config: {:?}", config);
 
         let running = Arc::clone(&self.running);
-        let shared_data = Arc::clone(&self.shared_data);
+        let output = Arc::clone(&self.output);
+        let audio_config = Arc::clone(&self.config);
+        let stream_error = Arc::clone(&self.stream_error);
 
         let sample_rate = config.sample_rate().0 as f32;
         let channels = config.channels() as usize;
 
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => {
-                Self::build_stream_f32(&device, &config.into(), sample_rate, channels, running, shared_data)?
+                Self::build_stream_f32(&device, &config.into(), sample_rate, channels, running, output, audio_config, stream_error)?
             }
             cpal::SampleFormat::I16 => {
-                Self::build_stream_i16(&device, &config.into(), sample_rate, channels, running, shared_data)?
+                Self::build_stream_i16(&device, &config.into(), sample_rate, channels, running, output, audio_config, stream_error)?
             }
             cpal::SampleFormat::U16 => {
-                Self::build_stream_u16(&device, &config.into(), sample_rate, channels, running, shared_data)?
+                Self::build_stream_u16(&device, &config.into(), sample_rate, channels, running, output, audio_config, stream_error)?
             }
             _ => return Err(anyhow::anyhow!("Unsupported sample format")),
         };
@@ -164,66 +212,66 @@ impl AudioAnalyzer {
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
         self.stream = None;
-        
-        // Clear the audio data so old values don't persist
-        if let Ok(mut data) = self.shared_data.lock() {
-            *data = AudioData::default();
-        }
-        
+        self.output.reset();
         log::info!("Audio analyzer stopped");
     }
+}
 
+impl Drop for AudioAnalyzer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl AudioAnalyzer {
     /// Get current FFT values
     pub fn get_fft(&self) -> [f32; 8] {
-        self.shared_data.lock().unwrap().fft
+        std::array::from_fn(|i| f32::from_bits(self.output.fft[i].load(Ordering::Relaxed)))
     }
 
     /// Get current volume
     pub fn get_volume(&self) -> f32 {
-        self.shared_data.lock().unwrap().volume
+        f32::from_bits(self.output.volume.load(Ordering::Relaxed))
     }
 
-    /// Check if beat detected
+    /// Check if beat was detected since last call (atomically clears the flag)
     pub fn is_beat(&self) -> bool {
-        let mut data = self.shared_data.lock().unwrap();
-        let beat = data.beat;
-        data.beat = false;
-        beat
+        self.output.beat.swap(false, Ordering::Relaxed)
     }
 
     /// Get beat phase
     pub fn get_beat_phase(&self) -> f32 {
-        self.shared_data.lock().unwrap().beat_phase
+        f32::from_bits(self.output.beat_phase.load(Ordering::Relaxed))
     }
 
-    /// Set amplitude
+    /// Set amplitude multiplier
     pub fn set_amplitude(&self, amplitude: f32) {
-        self.shared_data.lock().unwrap().amplitude = amplitude;
+        self.config.amplitude.store(amplitude.to_bits(), Ordering::Relaxed);
     }
 
-    /// Set smoothing
+    /// Set smoothing factor
     pub fn set_smoothing(&self, smoothing: f32) {
-        self.shared_data.lock().unwrap().smoothing = smoothing.clamp(0.0, 0.99);
+        self.config.smoothing.store(smoothing.clamp(0.0, 0.99).to_bits(), Ordering::Relaxed);
     }
 
     /// Get normalization enabled
     pub fn get_normalize(&self) -> bool {
-        self.shared_data.lock().unwrap().normalize
+        self.config.normalize.load(Ordering::Relaxed)
     }
 
     /// Set normalization enabled
     pub fn set_normalize(&self, normalize: bool) {
-        self.shared_data.lock().unwrap().normalize = normalize;
+        self.config.normalize.store(normalize, Ordering::Relaxed);
     }
 
     /// Get pink noise shaping (+3dB/octave) enabled
     pub fn get_pink_noise_shaping(&self) -> bool {
-        self.shared_data.lock().unwrap().pink_noise_shaping
+        self.config.pink_noise_shaping.load(Ordering::Relaxed)
     }
 
     /// Set pink noise shaping (+3dB/octave) enabled
     pub fn set_pink_noise_shaping(&self, enabled: bool) {
-        self.shared_data.lock().unwrap().pink_noise_shaping = enabled;
+        self.config.pink_noise_shaping.store(enabled, Ordering::Relaxed);
     }
 
     /// Build audio stream for f32 samples
@@ -233,7 +281,9 @@ impl AudioAnalyzer {
         sample_rate: f32,
         channels: usize,
         running: Arc<AtomicBool>,
-        shared_data: Arc<Mutex<AudioData>>,
+        output: Arc<AudioOutput>,
+        audio_config: Arc<AudioConfig>,
+        stream_error: Arc<AtomicBool>,
     ) -> anyhow::Result<cpal::Stream> {
         let fft_size = 1024;
         let mut planner = RealFftPlanner::<f32>::new();
@@ -252,7 +302,6 @@ impl AudioAnalyzer {
                     return;
                 }
 
-                // Convert to mono f32 (already f32, just average channels)
                 let mono_samples: Vec<f32> = data
                     .chunks(channels)
                     .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
@@ -262,23 +311,16 @@ impl AudioAnalyzer {
 
                 while input_buffer.len() >= fft_size {
                     let frame: Vec<f32> = input_buffer.drain(..fft_size).collect();
-
-                    // Process frame
                     process_audio_frame(
-                        &frame,
-                        sample_rate,
-                        fft_size,
-                        &r2c,
-                        &mut scratch,
-                        &mut beat_energy,
-                        &mut beat_history,
-                        &mut beat_counter,
-                        &shared_data,
+                        &frame, sample_rate, fft_size, &r2c, &mut scratch,
+                        &mut beat_energy, &mut beat_history, &mut beat_counter,
+                        &output, &audio_config,
                     );
                 }
             },
             move |err| {
                 log::error!("Audio stream error: {}", err);
+                stream_error.store(true, Ordering::Relaxed);
             },
             None,
         )?;
@@ -293,7 +335,9 @@ impl AudioAnalyzer {
         sample_rate: f32,
         channels: usize,
         running: Arc<AtomicBool>,
-        shared_data: Arc<Mutex<AudioData>>,
+        output: Arc<AudioOutput>,
+        audio_config: Arc<AudioConfig>,
+        stream_error: Arc<AtomicBool>,
     ) -> anyhow::Result<cpal::Stream> {
         let fft_size = 1024;
         let mut planner = RealFftPlanner::<f32>::new();
@@ -312,7 +356,6 @@ impl AudioAnalyzer {
                     return;
                 }
 
-                // Convert i16 to f32 mono
                 let mono_samples: Vec<f32> = data
                     .chunks(channels)
                     .map(|chunk| {
@@ -325,22 +368,16 @@ impl AudioAnalyzer {
 
                 while input_buffer.len() >= fft_size {
                     let frame: Vec<f32> = input_buffer.drain(..fft_size).collect();
-
                     process_audio_frame(
-                        &frame,
-                        sample_rate,
-                        fft_size,
-                        &r2c,
-                        &mut scratch,
-                        &mut beat_energy,
-                        &mut beat_history,
-                        &mut beat_counter,
-                        &shared_data,
+                        &frame, sample_rate, fft_size, &r2c, &mut scratch,
+                        &mut beat_energy, &mut beat_history, &mut beat_counter,
+                        &output, &audio_config,
                     );
                 }
             },
             move |err| {
                 log::error!("Audio stream error: {}", err);
+                stream_error.store(true, Ordering::Relaxed);
             },
             None,
         )?;
@@ -355,7 +392,9 @@ impl AudioAnalyzer {
         sample_rate: f32,
         channels: usize,
         running: Arc<AtomicBool>,
-        shared_data: Arc<Mutex<AudioData>>,
+        output: Arc<AudioOutput>,
+        audio_config: Arc<AudioConfig>,
+        stream_error: Arc<AtomicBool>,
     ) -> anyhow::Result<cpal::Stream> {
         let fft_size = 1024;
         let mut planner = RealFftPlanner::<f32>::new();
@@ -374,7 +413,6 @@ impl AudioAnalyzer {
                     return;
                 }
 
-                // Convert u16 to f32 mono
                 let mono_samples: Vec<f32> = data
                     .chunks(channels)
                     .map(|chunk| {
@@ -387,22 +425,16 @@ impl AudioAnalyzer {
 
                 while input_buffer.len() >= fft_size {
                     let frame: Vec<f32> = input_buffer.drain(..fft_size).collect();
-
                     process_audio_frame(
-                        &frame,
-                        sample_rate,
-                        fft_size,
-                        &r2c,
-                        &mut scratch,
-                        &mut beat_energy,
-                        &mut beat_history,
-                        &mut beat_counter,
-                        &shared_data,
+                        &frame, sample_rate, fft_size, &r2c, &mut scratch,
+                        &mut beat_energy, &mut beat_history, &mut beat_counter,
+                        &output, &audio_config,
                     );
                 }
             },
             move |err| {
                 log::error!("Audio stream error: {}", err);
+                stream_error.store(true, Ordering::Relaxed);
             },
             None,
         )?;
@@ -417,7 +449,8 @@ impl Default for AudioAnalyzer {
     }
 }
 
-/// Process a single audio frame
+/// Process a single audio frame — runs on the real-time audio callback thread.
+/// Reads config atomically, writes results atomically. No mutex involved.
 fn process_audio_frame(
     frame: &[f32],
     sample_rate: f32,
@@ -427,11 +460,12 @@ fn process_audio_frame(
     beat_energy: &mut f32,
     beat_history: &mut Vec<f32>,
     beat_counter: &mut u32,
-    shared_data: &Arc<Mutex<AudioData>>,
+    output: &Arc<AudioOutput>,
+    config: &Arc<AudioConfig>,
 ) {
     use rustfft::num_complex::Complex;
 
-    // Apply Hann window and convert to mutable vec
+    // Apply Hann window
     let mut windowed: Vec<f32> = frame
         .iter()
         .enumerate()
@@ -447,16 +481,8 @@ fn process_audio_frame(
         return;
     }
 
-    // Calculate magnitude spectrum
-    let magnitudes: Vec<f32> = spectrum
-        .iter()
-        .map(|c| c.norm())
-        .collect();
-
-    // Calculate 8 frequency bands
+    let magnitudes: Vec<f32> = spectrum.iter().map(|c| c.norm()).collect();
     let bands = calculate_bands(&magnitudes, sample_rate, fft_size);
-
-    // Calculate volume
     let volume: f32 = frame.iter().map(|&s| s.abs()).sum::<f32>() / fft_size as f32;
 
     // Beat detection
@@ -488,49 +514,42 @@ fn process_audio_frame(
 
     let phase = ((*beat_counter as f32 + (instant_energy / beat_energy.max(0.001)).min(1.0)) * 0.1) % 1.0;
 
-    // Update shared data
-    if let Ok(mut data) = shared_data.lock() {
-        let smoothing = data.smoothing.clamp(0.0, 0.99);
-        let amplitude = data.amplitude;
-        let normalize = data.normalize;
-        let pink_noise_shaping = data.pink_noise_shaping;
+    // Read config atomically (no mutex, no blocking)
+    let smoothing = config.smoothing();
+    let amplitude = config.amplitude();
+    let normalize = config.normalize.load(Ordering::Relaxed);
+    let pink_noise_shaping = config.pink_noise_shaping.load(Ordering::Relaxed);
 
-        // Find max band value for normalization
-        let max_band = bands.iter().cloned().fold(0.0f32, f32::max).max(0.001);
-        
-        for (i, band) in bands.iter().enumerate() {
-            // Apply pink noise compensation (+3dB per octave = multiply higher bands)
-            // Band 0 (Sub): 1.0x, Band 7 (Air): 2.83x (approx +9dB total)
-            let pink_factor = if pink_noise_shaping {
-                1.0 + (i as f32 * 0.26) // Linear approximation of +3dB/octave
-            } else {
-                1.0
-            };
-            
-            // Normalize and apply pink shaping
-            let normalized_band = if normalize {
-                (band / max_band) * pink_factor
-            } else {
-                band * pink_factor
-            };
-            
-            // Apply exponential moving average smoothing
-            let smoothed = data.fft[i] * smoothing + normalized_band * (1.0 - smoothing);
-            
-            // Apply amplitude to final output (not to the new sample)
-            data.fft[i] = smoothed * amplitude;
-        }
+    let max_band = bands.iter().cloned().fold(0.0f32, f32::max).max(0.001);
 
-        // Volume smoothing and amplitude
-        let smoothed_volume = data.volume * smoothing + volume * (1.0 - smoothing);
-        data.volume = smoothed_volume * amplitude;
+    // Write results atomically (no mutex, no blocking)
+    for (i, band) in bands.iter().enumerate() {
+        let pink_factor = if pink_noise_shaping {
+            1.0 + (i as f32 * 0.26)
+        } else {
+            1.0
+        };
 
-        if is_beat {
-            data.beat = true;
-        }
+        let normalized_band = if normalize {
+            (band / max_band) * pink_factor
+        } else {
+            band * pink_factor
+        };
 
-        data.beat_phase = phase;
+        let prev = f32::from_bits(output.fft[i].load(Ordering::Relaxed));
+        let smoothed = prev * smoothing + normalized_band * (1.0 - smoothing);
+        output.fft[i].store((smoothed * amplitude).to_bits(), Ordering::Relaxed);
     }
+
+    let prev_volume = f32::from_bits(output.volume.load(Ordering::Relaxed));
+    let smoothed_volume = prev_volume * smoothing + volume * (1.0 - smoothing);
+    output.volume.store((smoothed_volume * amplitude).to_bits(), Ordering::Relaxed);
+
+    if is_beat {
+        output.beat.store(true, Ordering::Relaxed);
+    }
+
+    output.beat_phase.store(phase.to_bits(), Ordering::Relaxed);
 }
 
 /// Calculate 8 logarithmic frequency bands from FFT magnitudes

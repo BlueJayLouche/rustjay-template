@@ -312,7 +312,10 @@ impl WgpuEngine {
     pub fn render(&mut self) {
         // Get current HSB parameters and apply modulations
         let (hsb_params, color_enabled) = {
-            let state = self.shared_state.lock().unwrap();
+            let state = match self.shared_state.lock() {
+                Ok(s) => s,
+                Err(e) => e.into_inner(),
+            };
             
             // Start with base values
             let base_hue = state.audio_routing.base_hue;
@@ -363,6 +366,12 @@ impl WgpuEngine {
             }
         }
 
+        // Extract texture refs — guaranteed Some after ensure_size above
+        let Some(ref input_tex) = self.input_texture.texture else {
+            log::warn!("render: skipping frame, input texture unavailable");
+            return;
+        };
+
         // Create texture bind group
         let texture_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Texture Bind Group"),
@@ -370,15 +379,11 @@ impl WgpuEngine {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        self.input_texture.view().expect("Input texture not initialized"),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&input_tex.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(
-                        &self.input_texture.texture.as_ref().unwrap().sampler,
-                    ),
+                    resource: wgpu::BindingResource::Sampler(&input_tex.sampler),
                 },
             ],
         });

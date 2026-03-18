@@ -361,6 +361,11 @@ impl InputManager {
     pub fn is_active(&self) -> bool {
         self.active
     }
+
+    /// Returns true if the NDI source was lost (not found or too many errors)
+    pub fn is_ndi_source_lost(&self) -> bool {
+        self.ndi_receiver.as_ref().map(|r| r.is_source_lost()).unwrap_or(false)
+    }
 }
 
 impl Default for InputManager {

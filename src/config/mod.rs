@@ -120,11 +120,22 @@ impl AppSettings {
     /// Load settings from default config file
     pub fn load() -> anyhow::Result<Self> {
         let path = Self::config_path()?;
+
+        // Warn if a leftover tmp file exists — indicates a previous crash mid-save
+        let tmp_path = path.with_extension("json.tmp");
+        if tmp_path.exists() {
+            log::warn!(
+                "Found leftover {:?} — previous save may have been interrupted. Using {:?}.",
+                tmp_path,
+                path
+            );
+        }
+
         if !path.exists() {
             log::info!("No config file found at {:?}, using defaults", path);
             return Ok(Self::default());
         }
-        
+
         let content = std::fs::read_to_string(&path)?;
         let settings: AppSettings = serde_json::from_str(&content)?;
         log::info!("Loaded settings from {:?}", path);
@@ -132,16 +143,21 @@ impl AppSettings {
     }
     
     /// Save settings to default config file
+    ///
+    /// Writes to a `.tmp` file first, then atomically renames to avoid
+    /// corrupting the config if the process crashes mid-write.
     pub fn save(&self) -> anyhow::Result<()> {
         let path = Self::config_path()?;
-        
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        
+
+        let tmp_path = path.with_extension("json.tmp");
         let content = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, content)?;
+        std::fs::write(&tmp_path, &content)?;
+        std::fs::rename(&tmp_path, &path)?;
         log::info!("Saved settings to {:?}", path);
         Ok(())
     }
