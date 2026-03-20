@@ -2,10 +2,10 @@
 name = "rustjay-template"
 version = "0.1.0"
 edition = "2021"
-authors = ["VJ Developer"]
+authors = ["BlueJayLouche <bluejaylouche@gmail.com>"]
 description = "RustJay Template - High-performance video processing application"
 license = "MIT"
-repository = "https://github.com/yourusername/rustjay-template"
+repository = "https://github.com/BlueJayLouche/rustjay-template"
 keywords = ["video", "vj", "ndi", "syphon", "real-time"]
 categories = ["graphics", "multimedia"]
 
@@ -76,8 +76,8 @@ imgui-winit-support = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Syphon (macOS GPU texture sharing)
-syphon-core = { path = "../crates/syphon/syphon-core" }
-syphon-wgpu = { path = "../crates/syphon/syphon-wgpu" }
+syphon-core = { path = "../syphon-rs/syphon-core" }
+syphon-wgpu = { path = "../syphon-rs/syphon-wgpu" }
 metal = "0.29"
 cocoa = "0.25"
 objc = "0.2"
