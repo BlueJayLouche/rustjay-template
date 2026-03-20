@@ -86,8 +86,11 @@ impl SpoutDiscovery {
             }
 
             let base = view.Value as *const u8;
-            let count = *(base as *const u32) as usize;
-            log::debug!("[Spout] Discovery: {} sender(s) in SpoutSenderNames", count);
+            // Cap to 512 (Spout2 SDK's MaxSenders) to guard against garbage data
+            // in a mapping that was created by another Spout app with a different layout.
+            let raw_count = *(base as *const u32) as usize;
+            let count = raw_count.min(512);
+            log::debug!("[Spout] Discovery: {} sender(s) in SpoutSenderNames (raw={})", count, raw_count);
 
             let mut senders = Vec::with_capacity(count);
             for i in 0..count {
