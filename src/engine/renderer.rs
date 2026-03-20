@@ -40,6 +40,14 @@ pub struct WgpuEngine {
     vertex_buffer: wgpu::Buffer,
     hsb_uniform_buffer: wgpu::Buffer,
 
+    /// Cached bind group for the HSB uniform buffer — recreated never (buffer is stable).
+    uniform_bind_group: wgpu::BindGroup,
+    /// Cached bind group for the blit pipeline source — recreated only when render_target changes.
+    blit_bind_group: wgpu::BindGroup,
+    /// Cached bind group for the input texture — recreated when `texture_generation` changes.
+    cached_texture_bind_group: Option<wgpu::BindGroup>,
+    cached_texture_gen: u64,
+
     frame_count: u64,
     fps_last_time: std::time::Instant,
     fps_frame_count: u32,
@@ -125,6 +133,17 @@ impl WgpuEngine {
             mapped_at_creation: false,
         });
 
+        // Pre-create stable bind groups (recreated only when dependencies change).
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Uniform Bind Group"),
+            layout: &main_pipeline.uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: hsb_uniform_buffer.as_entire_binding(),
+            }],
+        });
+        let blit_bind_group = blit_pipeline.create_bind_group(&device, &render_target.view);
+
         Ok(Self {
             instance: instance.clone(),
             adapter,
@@ -141,6 +160,10 @@ impl WgpuEngine {
             input_texture,
             vertex_buffer,
             hsb_uniform_buffer,
+            uniform_bind_group,
+            blit_bind_group,
+            cached_texture_bind_group: None,
+            cached_texture_gen: u64::MAX,
             frame_count: 0,
             fps_last_time: std::time::Instant::now(),
             fps_frame_count: 0,
@@ -248,33 +271,43 @@ impl WgpuEngine {
                     label: Some("Render Encoder"),
                 });
 
-        if self.input_texture.texture.is_none() {
+        // Ensure a fallback input texture exists when no source is active.
+        if self.input_texture.binding_view().is_none() {
             self.input_texture.ensure_size(1920, 1080);
-            if let Some(ref tex) = self.input_texture.texture {
-                tex.clear_to_black(&self.queue);
+        }
+
+        // Recreate the texture bind group only when the input texture changes.
+        let current_gen = self.input_texture.texture_generation;
+        if self.cached_texture_gen != current_gen {
+            if let (Some(input_view), Some(input_sampler)) = (
+                self.input_texture.binding_view(),
+                self.input_texture.binding_sampler(),
+            ) {
+                self.cached_texture_bind_group =
+                    Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Texture Bind Group"),
+                        layout: &self.main_pipeline.texture_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(input_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(input_sampler),
+                            },
+                        ],
+                    }));
+                self.cached_texture_gen = current_gen;
             }
         }
 
-        let Some(ref input_tex) = self.input_texture.texture else {
+        let Some(ref texture_bind_group) = self.cached_texture_bind_group else {
             log::warn!("render: skipping frame, input texture unavailable");
             return;
         };
 
-        let texture_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Bind Group"),
-            layout: &self.main_pipeline.texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&input_tex.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&input_tex.sampler),
-                },
-            ],
-        });
-
+        // Update uniform buffer contents each frame (only the data changes, not the bind group).
         let hsb_uniforms: HsbUniforms = if color_enabled {
             (&hsb_params).into()
         } else {
@@ -285,15 +318,6 @@ impl WgpuEngine {
             0,
             bytemuck::bytes_of(&hsb_uniforms),
         );
-
-        let uniform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Uniform Bind Group"),
-            layout: &self.main_pipeline.uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.hsb_uniform_buffer.as_entire_binding(),
-            }],
-        });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -313,15 +337,14 @@ impl WgpuEngine {
 
             render_pass.set_pipeline(&self.main_pipeline.render_pipeline);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_bind_group(0, &texture_bind_group, &[]);
-            render_pass.set_bind_group(1, &uniform_bind_group, &[]);
+            render_pass.set_bind_group(0, texture_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.uniform_bind_group, &[]);
             render_pass.draw(0..6, 0..1);
         }
 
         self.blit_pipeline.blit(
-            &self.device,
             &mut encoder,
-            &self.render_target.view,
+            &self.blit_bind_group,
             &surface_view,
             &self.vertex_buffer,
         );

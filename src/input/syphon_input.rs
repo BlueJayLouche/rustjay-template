@@ -67,23 +67,70 @@ impl SyphonInputReceiver {
         Ok(())
     }
 
-    /// Try to receive a texture frame (zero-copy GPU path).
+    /// Connect to a Syphon server by UUID (unambiguous).
+    /// Falls back to name-based matching if UUID lookup fails.
+    /// Returns an error if `initialize()` has not been called.
+    pub fn connect_by_uuid(&mut self, server_uuid: impl Into<String>, server_name: impl Into<String>) -> anyhow::Result<()> {
+        let server_uuid = server_uuid.into();
+        let server_name = server_name.into();
+
+        if self.is_connected() {
+            self.disconnect();
+        }
+
+        log::info!("[Syphon Input] Connecting to: {} (uuid={})", server_name, server_uuid);
+
+        #[cfg(target_os = "macos")]
+        {
+            let inner = self.inner.as_mut()
+                .ok_or_else(|| anyhow::anyhow!("SyphonInputReceiver not initialized — call initialize() first"))?;
+
+            let info = syphon_core::ServerInfo {
+                name: server_name.clone(),
+                uuid: server_uuid.clone(),
+                app_name: String::new(),
+                bundle_id: String::new(),
+            };
+
+            inner.connect_by_info(&info)
+                .map_err(|e| anyhow::anyhow!("Failed to connect to '{}' (uuid={}): {:?}", server_name, server_uuid, e))?;
+        }
+
+        self.server_name = Some(server_name);
+        Ok(())
+    }
+
+    /// Try to receive a frame into the internal output texture.
+    ///
+    /// Returns `true` when a new frame was written. Access the texture with
+    /// [`output_texture`](Self::output_texture).
     pub fn try_receive_texture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-    ) -> Option<wgpu::Texture> {
+    ) -> bool {
         #[cfg(target_os = "macos")]
         {
             if let Some(ref mut inner) = self.inner {
-                if let Some(texture) = inner.receive_texture(device, queue) {
-                    self.resolution = (texture.width(), texture.height());
-                    return Some(texture);
+                if inner.receive_texture(device, queue) {
+                    if let Some(tex) = inner.output_texture() {
+                        self.resolution = (tex.width(), tex.height());
+                    }
+                    return true;
                 }
             }
         }
         let _ = (device, queue);
-        None
+        false
+    }
+
+    /// The output texture, valid after [`try_receive_texture`](Self::try_receive_texture)
+    /// returns `true`.
+    pub fn output_texture(&self) -> Option<&wgpu::Texture> {
+        #[cfg(target_os = "macos")]
+        { self.inner.as_ref().and_then(|i| i.output_texture()) }
+        #[cfg(not(target_os = "macos"))]
+        { None }
     }
 
     /// Disconnect from the server

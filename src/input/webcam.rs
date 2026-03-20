@@ -88,23 +88,24 @@ impl WebcamCapture {
                         let yuyv_data = buffer.to_vec();
                         let mut bgra_data = Vec::with_capacity((actual_width * actual_height * 4) as usize);
                         
-                        // YUY2 is 2 bytes per pixel, arranged as: Y0 U Y1 V
-                        // Each pair of pixels shares U and V
+                        // YUY2 is 2 bytes per pixel, arranged as: Y0 U Y1 V.
+                        // Cameras commonly deliver limited-range BT.601 YUV here,
+                        // so expand luma/chroma before converting to RGB.
                         for chunk in yuyv_data.chunks_exact(4) {
-                            let y0 = chunk[0] as f32;
+                            let y0 = (chunk[0] as f32 - 16.0).max(0.0);
                             let u = chunk[1] as f32 - 128.0;
-                            let y1 = chunk[2] as f32;
+                            let y1 = (chunk[2] as f32 - 16.0).max(0.0);
                             let v = chunk[3] as f32 - 128.0;
                             
                             // Convert first pixel (Y0, U, V)
-                            let r0 = (y0 + 1.402 * v).clamp(0.0, 255.0) as u8;
-                            let g0 = (y0 - 0.344136 * u - 0.714136 * v).clamp(0.0, 255.0) as u8;
-                            let b0 = (y0 + 1.772 * u).clamp(0.0, 255.0) as u8;
+                            let r0 = (1.164383 * y0 + 1.596027 * v).clamp(0.0, 255.0) as u8;
+                            let g0 = (1.164383 * y0 - 0.391762 * u - 0.812968 * v).clamp(0.0, 255.0) as u8;
+                            let b0 = (1.164383 * y0 + 2.017232 * u).clamp(0.0, 255.0) as u8;
                             
                             // Convert second pixel (Y1, U, V)
-                            let r1 = (y1 + 1.402 * v).clamp(0.0, 255.0) as u8;
-                            let g1 = (y1 - 0.344136 * u - 0.714136 * v).clamp(0.0, 255.0) as u8;
-                            let b1 = (y1 + 1.772 * u).clamp(0.0, 255.0) as u8;
+                            let r1 = (1.164383 * y1 + 1.596027 * v).clamp(0.0, 255.0) as u8;
+                            let g1 = (1.164383 * y1 - 0.391762 * u - 0.812968 * v).clamp(0.0, 255.0) as u8;
+                            let b1 = (1.164383 * y1 + 2.017232 * u).clamp(0.0, 255.0) as u8;
                             
                             // Output as BGRA for first pixel
                             bgra_data.push(b0);

@@ -55,10 +55,10 @@ impl App {
                 }
             }
             #[cfg(target_os = "macos")]
-            InputCommand::StartSyphon { server_name } => {
-                log::info!("Starting Syphon: {}", server_name);
+            InputCommand::StartSyphon { server_name, server_uuid } => {
+                log::info!("Starting Syphon: {} (uuid={})", server_name, server_uuid);
                 if let Some(ref mut manager) = self.input_manager {
-                    match manager.start_syphon(&server_name) {
+                    match manager.start_syphon(&server_name, &server_uuid) {
                         Ok(_) => {
                             let mut state = lock(&self.shared_state);
                             state.input.is_active = true;
@@ -79,10 +79,8 @@ impl App {
             }
             InputCommand::RefreshDevices => {
                 if let Some(ref mut manager) = self.input_manager {
-                    manager.refresh_devices();
-                    if let Some(ref mut gui) = self.control_gui {
-                        gui.refresh_devices(manager);
-                    }
+                    manager.begin_refresh_devices();
+                    lock(&self.shared_state).input_discovering = true;
                 }
             }
             _ => {}

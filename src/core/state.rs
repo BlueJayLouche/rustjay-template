@@ -258,6 +258,9 @@ pub struct SharedState {
     
     // Settings save request flag
     pub save_settings_requested: bool,
+
+    // Background device discovery in progress
+    pub input_discovering: bool,
     
     // Web server
     pub web_command: WebCommand,
@@ -353,8 +356,10 @@ impl SharedState {
             web_command: WebCommand::None,
             web_enabled: false,
             web_port: 8080,
-            
+
             lfo: LfoState::new(),
+
+            input_discovering: false,
         }
     }
 

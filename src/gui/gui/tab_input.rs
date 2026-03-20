@@ -4,12 +4,13 @@ use crate::core::InputCommand;
 impl ControlGui {
     /// Build the Input tab
     pub(super) fn build_input_tab(&mut self, ui: &imgui::Ui) {
-        let (is_active, source_type, source_name) = {
+        let (is_active, source_type, source_name, is_discovering) = {
             let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
             (
                 state.input.is_active,
                 state.input.input_type,
                 state.input.source_name.clone(),
+                state.input_discovering,
             )
         };
 
@@ -26,14 +27,17 @@ impl ControlGui {
         ui.spacing();
 
         // Refresh Sources button - prominently at the top
-        let _btn_color = ui.push_style_color(imgui::StyleColor::Button, [0.2, 0.6, 0.8, 1.0]);
-        let _btn_hover = ui.push_style_color(imgui::StyleColor::ButtonHovered, [0.3, 0.7, 0.9, 1.0]);
-        let _btn_active = ui.push_style_color(imgui::StyleColor::ButtonActive, [0.1, 0.5, 0.7, 1.0]);
-        if ui.button_with_size("Refresh Sources", [ui.content_region_avail()[0], 30.0]) {
-            let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-            state.input_command = InputCommand::RefreshDevices;
+        if is_discovering {
+            ui.text_colored([1.0, 0.8, 0.2, 1.0], "Discovering sources...");
+        } else {
+            let _btn_color = ui.push_style_color(imgui::StyleColor::Button, [0.2, 0.6, 0.8, 1.0]);
+            let _btn_hover = ui.push_style_color(imgui::StyleColor::ButtonHovered, [0.3, 0.7, 0.9, 1.0]);
+            let _btn_active = ui.push_style_color(imgui::StyleColor::ButtonActive, [0.1, 0.5, 0.7, 1.0]);
+            if ui.button_with_size("Refresh Sources", [ui.content_region_avail()[0], 30.0]) {
+                let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                state.input_command = InputCommand::RefreshDevices;
+            }
         }
-        // Tokens are automatically popped when they go out of scope
 
         ui.spacing();
         ui.separator();
@@ -92,15 +96,17 @@ impl ControlGui {
                     .map(|s| format!("{} - {}", s.app_name, s.name))
                     .collect();
                 let server_name_refs: Vec<&str> = server_names.iter().map(|s| s.as_str()).collect();
-                let selected = self.selected_syphon;
                 ui.combo_simple_string("Select Syphon Server", &mut self.selected_syphon, &server_name_refs);
 
                 if ui.button("Start Syphon") {
-                    let server_name = self.syphon_servers.get(selected)
-                        .map(|s| s.name.clone())
-                        .unwrap_or_default();
-                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                    state.input_command = InputCommand::StartSyphon { server_name };
+                    let server_info = self.syphon_servers.get(self.selected_syphon).cloned();
+                    if let Some(info) = server_info {
+                        let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.input_command = InputCommand::StartSyphon {
+                            server_name: info.display_name().to_string(),
+                            server_uuid: info.uuid.clone(),
+                        };
+                    }
                 }
             } else {
                 ui.text_disabled("No Syphon servers found");
@@ -118,64 +124,85 @@ impl ControlGui {
         }
     }
 
-    /// Build the input preview
-    pub(super) fn build_input_preview(&mut self, ui: &imgui::Ui, available_size: [f32; 2]) {
+    /// Build the input preview — fills the window with a center-crop
+    pub(super) fn build_input_preview(&mut self, ui: &imgui::Ui) {
         if let Some(texture_id) = self.input_preview_texture_id {
             let (input_width, input_height) = {
                 let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
                 (state.input.width, state.input.height)
             };
 
-            let aspect = if input_width > 0 && input_height > 0 {
+            let avail = ui.content_region_avail();
+            if avail[0] <= 0.0 || avail[1] <= 0.0 {
+                return;
+            }
+
+            // UV extent of actual content within the fixed 1920×1080 preview texture
+            let content_u = if input_width > 0 { (input_width as f32 / 1920.0).min(1.0) } else { 1.0 };
+            let content_v = if input_height > 0 { (input_height as f32 / 1080.0).min(1.0) } else { 1.0 };
+
+            let content_aspect = if input_width > 0 && input_height > 0 {
                 input_width as f32 / input_height as f32
             } else {
                 16.0 / 9.0
             };
+            let container_aspect = avail[0] / avail[1];
 
-            let max_width = available_size[0] - 16.0;
-            let max_height = available_size[1] - 40.0;
+            // Center-crop: image fills the container; excess is cropped evenly on each side
+            let (uv0, uv1) = if content_aspect > container_aspect {
+                // Content is wider → show full height, crop sides
+                let visible = container_aspect / content_aspect;
+                let pad = (1.0 - visible) / 2.0;
+                ([pad * content_u, 0.0], [(1.0 - pad) * content_u, content_v])
+            } else {
+                // Content is taller → show full width, crop top/bottom
+                let visible = content_aspect / container_aspect;
+                let pad = (1.0 - visible) / 2.0;
+                ([0.0, pad * content_v], [content_u, (1.0 - pad) * content_v])
+            };
 
-            let mut tex_width = max_width;
-            let mut tex_height = tex_width / aspect;
-
-            if tex_height > max_height {
-                tex_height = max_height;
-                tex_width = tex_height * aspect;
-            }
-
-            let x_offset = (available_size[0] - tex_width) / 2.0;
-            ui.set_cursor_pos([x_offset, 30.0]);
-
-            imgui::Image::new(texture_id, [tex_width, tex_height])
-                .uv0([0.0, 0.0])
-                .uv1([1.0, 1.0])
+            imgui::Image::new(texture_id, avail)
+                .uv0(uv0)
+                .uv1(uv1)
                 .build(ui);
         } else {
             ui.text_disabled("No input preview available");
         }
     }
 
-    /// Build the output preview
-    pub(super) fn build_output_preview(&mut self, ui: &imgui::Ui, available_size: [f32; 2]) {
+    /// Build the output preview — fills the window with a center-crop
+    pub(super) fn build_output_preview(&mut self, ui: &imgui::Ui) {
         if let Some(texture_id) = self.output_preview_texture_id {
-            let aspect = 16.0 / 9.0;
-            let max_width = available_size[0] - 16.0;
-            let max_height = available_size[1] - 40.0;
+            let (internal_width, internal_height) = {
+                let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                (state.resolution.internal_width, state.resolution.internal_height)
+            };
 
-            let mut tex_width = max_width;
-            let mut tex_height = tex_width / aspect;
-
-            if tex_height > max_height {
-                tex_height = max_height;
-                tex_width = tex_height * aspect;
+            let avail = ui.content_region_avail();
+            if avail[0] <= 0.0 || avail[1] <= 0.0 {
+                return;
             }
 
-            let x_offset = (available_size[0] - tex_width) / 2.0;
-            ui.set_cursor_pos([x_offset, 30.0]);
+            // UV extent of render_target content within the 1920×1080 preview texture
+            let content_u = (internal_width as f32 / 1920.0).min(1.0);
+            let content_v = (internal_height as f32 / 1080.0).min(1.0);
 
-            imgui::Image::new(texture_id, [tex_width, tex_height])
-                .uv0([0.0, 0.0])
-                .uv1([1.0, 1.0])
+            let content_aspect = internal_width as f32 / internal_height as f32;
+            let container_aspect = avail[0] / avail[1];
+
+            let (uv0, uv1) = if content_aspect > container_aspect {
+                let visible = container_aspect / content_aspect;
+                let pad = (1.0 - visible) / 2.0;
+                ([pad * content_u, 0.0], [(1.0 - pad) * content_u, content_v])
+            } else {
+                let visible = content_aspect / container_aspect;
+                let pad = (1.0 - visible) / 2.0;
+                ([0.0, pad * content_v], [content_u, (1.0 - pad) * content_v])
+            };
+
+            imgui::Image::new(texture_id, avail)
+                .uv0(uv0)
+                .uv1(uv1)
                 .build(ui);
         } else {
             ui.text_disabled("No output preview available");

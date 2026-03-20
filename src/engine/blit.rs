@@ -114,16 +114,14 @@ impl BlitPipeline {
         }
     }
 
-    /// Blit `source_view` into `dest_view` using the full-screen quad `vertex_buffer`.
-    pub fn blit(
+    /// Create a bind group for this blit pipeline targeting `source_view`.
+    /// Store the result and pass it to `blit()` to avoid recreating it each frame.
+    pub fn create_bind_group(
         &self,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
-        dest_view: &wgpu::TextureView,
-        vertex_buffer: &wgpu::Buffer,
-    ) {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blit Bind Group"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -136,8 +134,18 @@ impl BlitPipeline {
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
-        });
+        })
+    }
 
+    /// Blit `bind_group`'s source texture into `dest_view` using the full-screen quad.
+    /// The bind group must have been created by `create_bind_group`.
+    pub fn blit(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        bind_group: &wgpu::BindGroup,
+        dest_view: &wgpu::TextureView,
+        vertex_buffer: &wgpu::Buffer,
+    ) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Blit Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -155,7 +163,7 @@ impl BlitPipeline {
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.set_bind_group(0, bind_group, &[]);
         render_pass.draw(0..6, 0..1);
     }
 }

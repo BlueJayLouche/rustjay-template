@@ -3,6 +3,7 @@
 //! All types in this module are safe to use from the real-time audio callback:
 //! no allocations, no mutexes — only atomics.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -74,49 +75,52 @@ impl AudioConfig {
 
 /// Process a single audio frame — runs on the real-time audio callback thread.
 /// Reads config atomically, writes results atomically. No mutex involved.
+///
+/// `windowed_buf`, `spectrum_buf`, and `magnitudes_buf` must be pre-allocated
+/// to `fft_size`, `fft_size/2+1`, and `fft_size/2+1` elements respectively.
+/// Passing them in avoids heap allocation on the real-time thread.
 pub fn process_audio_frame(
     frame: &[f32],
     sample_rate: f32,
     fft_size: usize,
     r2c: &std::sync::Arc<dyn realfft::RealToComplex<f32>>,
     scratch: &mut [rustfft::num_complex::Complex<f32>],
+    windowed_buf: &mut Vec<f32>,
+    spectrum_buf: &mut Vec<rustfft::num_complex::Complex<f32>>,
+    magnitudes_buf: &mut Vec<f32>,
     beat_energy: &mut f32,
-    beat_history: &mut Vec<f32>,
+    beat_history: &mut VecDeque<f32>,
     beat_counter: &mut u32,
     output: &Arc<AudioOutput>,
     config: &Arc<AudioConfig>,
 ) {
-    use rustfft::num_complex::Complex;
+    // Apply Hann window in-place (no allocation)
+    for (i, (&s, w_out)) in frame.iter().zip(windowed_buf.iter_mut()).enumerate() {
+        let w = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / fft_size as f32).cos());
+        *w_out = s * w;
+    }
 
-    // Apply Hann window
-    let mut windowed: Vec<f32> = frame
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| {
-            let w =
-                0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / fft_size as f32).cos());
-            s * w
-        })
-        .collect();
-
-    // Perform FFT
-    let mut spectrum: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); fft_size / 2 + 1];
+    // Perform FFT into pre-allocated spectrum buffer
     if r2c
-        .process_with_scratch(&mut windowed, &mut spectrum, scratch)
+        .process_with_scratch(windowed_buf, spectrum_buf, scratch)
         .is_err()
     {
         return;
     }
 
-    let magnitudes: Vec<f32> = spectrum.iter().map(|c| c.norm()).collect();
-    let bands = calculate_bands(&magnitudes, sample_rate, fft_size);
+    // Compute magnitudes in-place (no allocation)
+    for (m, c) in magnitudes_buf.iter_mut().zip(spectrum_buf.iter()) {
+        *m = c.norm();
+    }
+
+    let bands = calculate_bands(magnitudes_buf, sample_rate, fft_size);
     let volume: f32 = frame.iter().map(|&s| s.abs()).sum::<f32>() / fft_size as f32;
 
-    // Beat detection
+    // Beat detection — O(1) front removal via VecDeque
     let instant_energy: f32 = bands.iter().sum();
-    beat_history.push(instant_energy);
+    beat_history.push_back(instant_energy);
     if beat_history.len() > 43 {
-        beat_history.remove(0);
+        beat_history.pop_front();
     }
 
     let local_average = if beat_history.len() >= 43 {

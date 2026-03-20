@@ -26,6 +26,7 @@ pub enum InputCommand {
     #[cfg(target_os = "macos")]
     StartSyphon {
         server_name: String,
+        server_uuid: String,
     },
     StopInput,
     RefreshDevices,
@@ -55,6 +56,14 @@ pub struct InputFrame {
     pub timestamp: std::time::Instant,
 }
 
+/// Results returned from the background discovery thread
+struct DiscoveryResults {
+    webcam: Vec<String>,
+    ndi: Vec<String>,
+    #[cfg(target_os = "macos")]
+    syphon: Vec<SyphonServerInfo>,
+}
+
 /// Manages a single video input source with hot-swappable backends
 pub struct InputManager {
     /// Current input type
@@ -78,8 +87,6 @@ pub struct InputManager {
     #[cfg(target_os = "macos")]
     syphon_receiver: Option<SyphonInputReceiver>,
     #[cfg(target_os = "macos")]
-    syphon_texture: Option<wgpu::Texture>,
-    #[cfg(target_os = "macos")]
     syphon_device: Option<std::sync::Arc<wgpu::Device>>,
     #[cfg(target_os = "macos")]
     syphon_queue: Option<std::sync::Arc<wgpu::Queue>>,
@@ -87,11 +94,15 @@ pub struct InputManager {
     // Current frame data (CPU path)
     current_frame: Option<Vec<u8>>,
 
-    // Device lists
-    webcam_devices: Vec<String>,
-    ndi_sources: Vec<String>,
+    // Device lists — None = not yet discovered, Some([]) = discovered but none found
+    webcam_devices: Option<Vec<String>>,
+    ndi_sources: Option<Vec<String>>,
     #[cfg(target_os = "macos")]
-    syphon_servers: Vec<SyphonServerInfo>,
+    syphon_servers: Option<Vec<SyphonServerInfo>>,
+
+    // Background discovery
+    discovery_rx: Option<mpsc::Receiver<DiscoveryResults>>,
+    is_discovering: bool,
 }
 
 impl InputManager {
@@ -111,16 +122,16 @@ impl InputManager {
             #[cfg(target_os = "macos")]
             syphon_receiver: None,
             #[cfg(target_os = "macos")]
-            syphon_texture: None,
-            #[cfg(target_os = "macos")]
             syphon_device: None,
             #[cfg(target_os = "macos")]
             syphon_queue: None,
             current_frame: None,
-            webcam_devices: Vec::new(),
-            ndi_sources: Vec::new(),
+            webcam_devices: None,
+            ndi_sources: None,
             #[cfg(target_os = "macos")]
-            syphon_servers: Vec::new(),
+            syphon_servers: None,
+            discovery_rx: None,
+            is_discovering: false,
         }
     }
 
@@ -133,46 +144,20 @@ impl InputManager {
         }
     }
 
-    /// Get list of available webcam devices
-    pub fn webcam_devices(&mut self) -> &[String] {
-        #[cfg(feature = "webcam")]
-        if self.webcam_devices.is_empty() {
-            log::info!("[InputManager] Discovering webcam devices...");
-            self.webcam_devices = list_cameras();
-            log::info!("[InputManager] Found {} webcam device(s)", self.webcam_devices.len());
-            for device in &self.webcam_devices {
-                log::info!("  - {}", device);
-            }
-        }
-        &self.webcam_devices
+    /// Get cached list of webcam devices (empty until discovery completes)
+    pub fn webcam_devices(&self) -> &[String] {
+        self.webcam_devices.as_deref().unwrap_or(&[])
     }
 
-    /// Get list of available NDI sources
-    pub fn ndi_sources(&mut self) -> &[String] {
-        if self.ndi_sources.is_empty() {
-            log::info!("[InputManager] Discovering NDI sources...");
-            self.ndi_sources = list_ndi_sources(2000);
-            log::info!("[InputManager] Found {} NDI source(s)", self.ndi_sources.len());
-            for source in &self.ndi_sources {
-                log::info!("  - {}", source);
-            }
-        }
-        &self.ndi_sources
+    /// Get cached list of NDI sources (empty until discovery completes)
+    pub fn ndi_sources(&self) -> &[String] {
+        self.ndi_sources.as_deref().unwrap_or(&[])
     }
 
-    /// Get list of available Syphon servers (macOS only)
+    /// Get cached list of Syphon servers (macOS only; empty until discovery completes)
     #[cfg(target_os = "macos")]
-    pub fn syphon_servers(&mut self) -> &[SyphonServerInfo] {
-        if self.syphon_servers.is_empty() {
-            log::info!("[InputManager] Discovering Syphon servers...");
-            let discovery = syphon_input::SyphonDiscovery::new();
-            self.syphon_servers = discovery.discover_servers();
-            log::info!("[InputManager] Found {} Syphon server(s)", self.syphon_servers.len());
-            for server in &self.syphon_servers {
-                log::info!("  - {} (app: {})", server.name, server.app_name);
-            }
-        }
-        &self.syphon_servers
+    pub fn syphon_servers(&self) -> &[SyphonServerInfo] {
+        self.syphon_servers.as_deref().unwrap_or(&[])
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -180,20 +165,88 @@ impl InputManager {
         &[]
     }
 
-    /// Refresh all device lists
-    pub fn refresh_devices(&mut self) {
-        self.webcam_devices.clear();
-        self.ndi_sources.clear();
-        #[cfg(target_os = "macos")]
-        {
-            self.syphon_servers.clear();
+    /// Whether background discovery is currently in progress
+    pub fn is_discovering(&self) -> bool {
+        self.is_discovering
+    }
+
+    /// Begin async device discovery in a background thread.
+    ///
+    /// Returns immediately; call [`poll_discovery`](Self::poll_discovery) each frame
+    /// to check when results are ready. Calling while a discovery is already in
+    /// progress is a no-op.
+    pub fn begin_refresh_devices(&mut self) {
+        if self.is_discovering {
+            return;
         }
-        // Re-populate on next access
-        let _ = self.webcam_devices();
-        let _ = self.ndi_sources();
+
+        self.webcam_devices = None;
+        self.ndi_sources = None;
         #[cfg(target_os = "macos")]
         {
-            let _ = self.syphon_servers();
+            self.syphon_servers = None;
+        }
+
+        self.is_discovering = true;
+        let (tx, rx) = mpsc::channel();
+        self.discovery_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            #[cfg(feature = "webcam")]
+            let webcam = {
+                log::info!("[InputManager] Discovering webcam devices...");
+                let devices = list_cameras();
+                log::info!("[InputManager] Found {} webcam device(s)", devices.len());
+                for d in &devices {
+                    log::info!("  - {}", d);
+                }
+                devices
+            };
+            #[cfg(not(feature = "webcam"))]
+            let webcam: Vec<String> = Vec::new();
+
+            log::info!("[InputManager] Discovering NDI sources...");
+            let ndi = list_ndi_sources(2000);
+            log::info!("[InputManager] Found {} NDI source(s)", ndi.len());
+
+            #[cfg(target_os = "macos")]
+            let syphon = {
+                log::info!("[InputManager] Discovering Syphon servers...");
+                let servers = syphon_input::SyphonDiscovery::new().discover_servers();
+                log::info!("[InputManager] Found {} Syphon server(s)", servers.len());
+                servers
+            };
+
+            let _ = tx.send(DiscoveryResults {
+                webcam,
+                ndi,
+                #[cfg(target_os = "macos")]
+                syphon,
+            });
+        });
+    }
+
+    /// Poll for background discovery completion.
+    ///
+    /// Returns `true` exactly once when discovery finishes — the caller should
+    /// update any caches (e.g. GUI device lists) at that point.
+    pub fn poll_discovery(&mut self) -> bool {
+        if !self.is_discovering {
+            return false;
+        }
+        let result = self.discovery_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some(result) = result {
+            self.webcam_devices = Some(result.webcam);
+            self.ndi_sources = Some(result.ndi);
+            #[cfg(target_os = "macos")]
+            {
+                self.syphon_servers = Some(result.syphon);
+            }
+            self.is_discovering = false;
+            self.discovery_rx = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -239,8 +292,9 @@ impl InputManager {
 
     /// Start Syphon input (macOS only)
     #[cfg(target_os = "macos")]
-    pub fn start_syphon(&mut self, server_name: impl Into<String>) -> Result<()> {
+    pub fn start_syphon(&mut self, server_name: impl Into<String>, server_uuid: impl Into<String>) -> Result<()> {
         let server_name = server_name.into();
+        let server_uuid = server_uuid.into();
 
         let device = self.syphon_device.clone();
         let queue = self.syphon_queue.clone();
@@ -250,13 +304,13 @@ impl InputManager {
 
             let mut receiver = SyphonInputReceiver::new();
             receiver.initialize(&device, &queue);
-            receiver.connect(&server_name)?;
+            receiver.connect_by_uuid(&server_uuid, &server_name)?;
 
             self.input_type = InputType::Syphon;
             self.active = true;
             self.syphon_receiver = Some(receiver);
 
-            log::info!("Started Syphon input: {}", server_name);
+            log::info!("Started Syphon input: {} (uuid={})", server_name, server_uuid);
             Ok(())
         } else {
             Err(anyhow::anyhow!("InputManager not initialized with wgpu device/queue"))
@@ -295,7 +349,6 @@ impl InputManager {
         #[cfg(target_os = "macos")]
         {
             self.syphon_receiver = None;
-            self.syphon_texture = None;
         }
 
         self.frame_receiver = None;
@@ -333,12 +386,11 @@ impl InputManager {
 
         // Handle Syphon frames (zero-copy texture path)
         #[cfg(target_os = "macos")]
-        if let (Some(ref mut syphon), Some(ref device), Some(ref queue)) = 
-            (self.syphon_receiver.as_mut(), self.syphon_device.as_ref(), self.syphon_queue.as_ref()) 
+        if let (Some(ref mut syphon), Some(ref device), Some(ref queue)) =
+            (self.syphon_receiver.as_mut(), self.syphon_device.as_ref(), self.syphon_queue.as_ref())
         {
-            if let Some(texture) = syphon.try_receive_texture(device, queue) {
-                self.resolution = (texture.width(), texture.height());
-                self.syphon_texture = Some(texture);
+            if syphon.try_receive_texture(device, queue) {
+                self.resolution = syphon.resolution();
                 self.has_new_frame = true;
             }
         }
@@ -355,17 +407,19 @@ impl InputManager {
         self.current_frame.take()
     }
 
-    /// Take the Syphon texture (zero-copy path, macOS only)
+    /// Borrow the Syphon output texture (macOS only).
+    ///
+    /// Valid after [`update`](Self::update) sets [`has_frame`](Self::has_frame).
+    /// Call [`clear_syphon_frame`](Self::clear_syphon_frame) after consuming it.
     #[cfg(target_os = "macos")]
-    pub fn take_syphon_texture(&mut self) -> Option<wgpu::Texture> {
-        self.has_new_frame = false;
-        self.syphon_texture.take()
+    pub fn syphon_output_texture(&self) -> Option<&wgpu::Texture> {
+        self.syphon_receiver.as_ref().and_then(|r| r.output_texture())
     }
 
-    /// Stub for non-macOS platforms
-    #[cfg(not(target_os = "macos"))]
-    pub fn take_syphon_texture(&mut self) -> Option<std::convert::Infallible> {
-        None
+    /// Reset the new-frame flag for the Syphon path.
+    #[cfg(target_os = "macos")]
+    pub fn clear_syphon_frame(&mut self) {
+        self.has_new_frame = false;
     }
 
     /// Get current resolution

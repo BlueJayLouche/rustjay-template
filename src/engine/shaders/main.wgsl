@@ -120,13 +120,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Sample input texture
     var color = textureSample(input_tex, input_sampler, in.texcoord);
 
-    // Apply HSB color adjustment (only to RGB, preserve alpha)
-    // Note: Input is BGRA, we need to swizzle for HSB processing
-    let rgb = vec3<f32>(color.b, color.g, color.r);
-    let adjusted_rgb = apply_hsb(rgb, hsb_params);
-
-    // Swizzle back to BGRA
-    color = vec4<f32>(adjusted_rgb.b, adjusted_rgb.g, adjusted_rgb.r, color.a);
+    // `textureSample` returns logical RGBA even for BGRA-backed textures.
+    let adjusted_rgb = apply_hsb(color.rgb, hsb_params);
+    color = vec4<f32>(adjusted_rgb, color.a);
 
     return color;
 }

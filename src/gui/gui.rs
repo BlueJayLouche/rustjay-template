@@ -108,9 +108,11 @@ impl ControlGui {
         // FPS is now tracked in WgpuEngine and stored in SharedState.performance
     }
 
-    /// Refresh device lists
-    pub fn refresh_devices(&mut self, input_manager: &mut InputManager) {
-        input_manager.refresh_devices();
+    /// Sync GUI device lists from the current InputManager state.
+    ///
+    /// Call this after [`poll_device_discovery`](crate::app::App::poll_device_discovery)
+    /// returns `true` (i.e. background discovery has finished).
+    pub fn update_device_lists(&mut self, input_manager: &InputManager) {
         self.webcam_devices = input_manager.webcam_devices().to_vec();
         self.ndi_sources = input_manager.ndi_sources().to_vec();
         #[cfg(target_os = "macos")]
@@ -118,14 +120,13 @@ impl ControlGui {
             self.syphon_servers = input_manager.syphon_servers().to_vec();
         }
 
-        // Refresh audio devices
+        // Audio device list is fast — refresh synchronously alongside the others
         self.audio_devices = crate::audio::list_audio_devices();
         log::info!("[GUI] Found {} audio device(s)", self.audio_devices.len());
         for device in &self.audio_devices {
             log::info!("  - {}", device);
         }
 
-        // Update shared state with available devices
         if let Ok(mut state) = self.shared_state.lock() {
             state.audio.available_devices = self.audio_devices.clone();
         }
@@ -142,38 +143,45 @@ impl ControlGui {
             .movable(false)
             .collapsible(false)
             .resizable(true)
+            .menu_bar(true)
             .build(|| {
                 self.build_menu_bar(ui);
                 self.build_tabs(ui);
             });
 
-        // Input preview window
-        let preview_pos = [420.0, 10.0];
-        let preview_size = [
-            (window_size[0] - preview_pos[0] - 10.0).max(200.0),
-            (window_size[1] / 2.0 - 15.0).max(200.0),
-        ];
+        // Preview windows — only rendered when enabled
+        let show_preview = {
+            let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+            state.show_preview
+        };
 
-        ui.window("Input Preview")
-            .position(preview_pos, imgui::Condition::FirstUseEver)
-            .size(preview_size, imgui::Condition::FirstUseEver)
-            .build(|| {
-                self.build_input_preview(ui, preview_size);
-            });
+        if show_preview {
+            let preview_pos = [420.0, 10.0];
+            let preview_size = [
+                (window_size[0] - preview_pos[0] - 10.0).max(200.0),
+                (window_size[1] / 2.0 - 15.0).max(200.0),
+            ];
 
-        // Output preview window
-        let output_preview_pos = [420.0, window_size[1] / 2.0 + 5.0];
-        let output_preview_size = [
-            (window_size[0] - output_preview_pos[0] - 10.0).max(200.0),
-            (window_size[1] / 2.0 - 15.0).max(200.0),
-        ];
+            ui.window("Input Preview")
+                .position(preview_pos, imgui::Condition::FirstUseEver)
+                .size(preview_size, imgui::Condition::FirstUseEver)
+                .build(|| {
+                    self.build_input_preview(ui);
+                });
 
-        ui.window("Output Preview")
-            .position(output_preview_pos, imgui::Condition::FirstUseEver)
-            .size(output_preview_size, imgui::Condition::FirstUseEver)
-            .build(|| {
-                self.build_output_preview(ui, output_preview_size);
-            });
+            let output_preview_pos = [420.0, window_size[1] / 2.0 + 5.0];
+            let output_preview_size = [
+                (window_size[0] - output_preview_pos[0] - 10.0).max(200.0),
+                (window_size[1] / 2.0 - 15.0).max(200.0),
+            ];
+
+            ui.window("Output Preview")
+                .position(output_preview_pos, imgui::Condition::FirstUseEver)
+                .size(output_preview_size, imgui::Condition::FirstUseEver)
+                .build(|| {
+                    self.build_output_preview(ui);
+                });
+        }
 
         // LFO Control Window (conditional)
         let show_lfo = {
@@ -195,9 +203,19 @@ impl ControlGui {
                 }
             });
 
+            ui.menu("View", || {
+                let show_preview = {
+                    let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.show_preview
+                };
+                if ui.menu_item_config("Show Previews").selected(show_preview).build() {
+                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.show_preview = !state.show_preview;
+                }
+            });
+
             ui.menu("Devices", || {
                 if ui.menu_item("Refresh All") {
-                    // Signal device refresh
                     let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
                     state.input_command = InputCommand::RefreshDevices;
                 }

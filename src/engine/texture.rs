@@ -189,6 +189,14 @@ pub struct InputTexture {
     queue: Arc<wgpu::Queue>,
     pub texture: Option<Texture>,
     has_data: bool,
+    /// External texture view for zero-copy paths (e.g. Syphon).
+    /// When Some, `binding_view` / `binding_sampler` return these instead of
+    /// the owned texture, bypassing any extra GPU copy.
+    ext_view: Option<wgpu::TextureView>,
+    ext_sampler: Option<wgpu::Sampler>,
+    /// Incremented whenever the underlying view changes so callers can
+    /// cheaply detect when to recreate their cached bind groups.
+    pub texture_generation: u64,
 }
 
 impl InputTexture {
@@ -199,6 +207,9 @@ impl InputTexture {
             queue,
             texture: None,
             has_data: false,
+            ext_view: None,
+            ext_sampler: None,
+            texture_generation: 0,
         }
     }
 
@@ -218,17 +229,38 @@ impl InputTexture {
                     "Input Texture",
                     &vec![0u8; (width * height * 4) as usize],
                 ));
+                self.texture_generation += 1;
             }
         }
     }
 
     /// Update with new BGRA frame data
     pub fn update(&mut self, data: &[u8], width: u32, height: u32) {
+        // Clear any external texture — we own the data now
+        if self.ext_view.is_some() {
+            self.ext_view = None;
+            self.ext_sampler = None;
+            self.texture_generation += 1;
+        }
         self.ensure_size(width, height);
         if let Some(ref tex) = self.texture {
             tex.update(&self.queue, data);
             self.has_data = true;
         }
+    }
+
+    /// Swap in a wgpu texture directly as the input texture.
+    ///
+    /// Used for the Syphon zero-copy path: the pool texture produced by the
+    /// Metal blit is installed directly, bypassing `copy_texture_to_texture`
+    /// and any hazard-tracking issues that can arise when wgpu reads a texture
+    /// that was written by an externally-committed Metal command buffer.
+    pub fn swap_texture(&mut self, source: wgpu::Texture) {
+        let width = source.width();
+        let height = source.height();
+        self.texture = Some(Texture::from_wgpu_texture(source, &self.device, width, height));
+        self.has_data = true;
+        self.texture_generation += 1;
     }
 
     /// Update from a wgpu texture (GPU-to-GPU copy, zero-copy)
@@ -270,9 +302,57 @@ impl InputTexture {
         }
     }
 
+    /// Point this input at an external wgpu texture (e.g. Syphon output).
+    ///
+    /// Creates a view and sampler from `tex` — no GPU copy at all.  The
+    /// underlying GPU resource is kept alive by wgpu's internal ref-counting
+    /// for as long as the view exists, even if the caller's `wgpu::Texture`
+    /// handle is later dropped or replaced.
+    pub fn set_external_texture(&mut self, tex: &wgpu::Texture) {
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        self.ext_view = Some(view);
+        self.ext_sampler = Some(sampler);
+        self.has_data = true;
+        self.texture_generation += 1;
+    }
+
+    /// Clear the external texture reference, falling back to the owned texture.
+    pub fn clear_external_texture(&mut self) {
+        self.ext_view = None;
+        self.ext_sampler = None;
+        self.texture_generation += 1;
+    }
+
+    /// Texture view for shader binding — external view when set, owned otherwise.
+    pub fn binding_view(&self) -> Option<&wgpu::TextureView> {
+        self.ext_view.as_ref()
+            .or_else(|| self.texture.as_ref().map(|t| &t.view))
+    }
+
+    /// Sampler for shader binding — external sampler when set, owned otherwise.
+    pub fn binding_sampler(&self) -> Option<&wgpu::Sampler> {
+        self.ext_sampler.as_ref()
+            .or_else(|| self.texture.as_ref().map(|t| &t.sampler))
+    }
+
     /// Get texture view
     pub fn view(&self) -> Option<&wgpu::TextureView> {
         self.texture.as_ref().map(|t| &t.view)
+    }
+
+    /// Returns true when an external (zero-copy) texture is active (e.g. Syphon).
+    /// When true, `texture` may be None so callers should use `render_target` for previews.
+    pub fn has_external_texture(&self) -> bool {
+        self.ext_view.is_some()
     }
 
     /// Check if input has received data

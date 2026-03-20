@@ -11,8 +11,13 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Create wgpu instance
         if self.wgpu_instance.is_none() {
+            let backends = if cfg!(target_os = "macos") {
+                wgpu::Backends::METAL
+            } else {
+                wgpu::Backends::all()
+            };
             self.wgpu_instance = Some(wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::all(),
+                backends,
                 ..Default::default()
             }));
         }
@@ -330,8 +335,19 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Compute real elapsed time since last frame (capped to avoid spiral-of-death).
+        let now = std::time::Instant::now();
+        self.frame_delta_time = now
+            .duration_since(self.last_frame_time)
+            .as_secs_f32()
+            .clamp(0.001, 0.1);
+        self.last_frame_time = now;
+
         // Process all pending subsystem commands
         self.dispatch_commands();
+
+        // Check if background device discovery has finished
+        self.poll_device_discovery();
 
         // Update systems
         self.update_input();

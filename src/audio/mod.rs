@@ -135,7 +135,7 @@ impl AudioAnalyzer {
 
         stream.play()?;
         self.stream = Some(stream);
-        self.running.store(true, Ordering::SeqCst);
+        self.running.store(true, Ordering::Release);
 
         log::info!("Audio analyzer started");
         Ok(())
@@ -143,7 +143,7 @@ impl AudioAnalyzer {
 
     /// Stop audio analysis
     pub fn stop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
+        self.running.store(false, Ordering::Release);
         self.stream = None;
         self.output.reset();
         log::info!("Audio analyzer stopped");

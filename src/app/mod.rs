@@ -75,6 +75,10 @@ struct App {
 
     // Modifier state
     shift_pressed: bool,
+
+    // Frame timing for accurate delta-time
+    last_frame_time: std::time::Instant,
+    frame_delta_time: f32,
 }
 
 impl App {
@@ -166,6 +170,8 @@ impl App {
             web_command_tx,
             config_manager,
             shift_pressed: false,
+            last_frame_time: std::time::Instant::now(),
+            frame_delta_time: 1.0 / 60.0,
         }
     }
 

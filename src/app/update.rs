@@ -15,20 +15,26 @@ impl App {
 
             manager.update();
 
-            // Handle Syphon texture (zero-copy path)
+            // Handle Syphon texture (GPU blit path)
             #[cfg(target_os = "macos")]
             if manager.input_type() == InputType::Syphon {
-                if let Some(texture) = manager.take_syphon_texture() {
-                    let width = texture.width();
-                    let height = texture.height();
+                if manager.has_frame() {
+                    let dims = manager.syphon_output_texture()
+                        .map(|t| (t.width(), t.height()));
 
-                    if let Some(ref mut engine) = self.output_engine {
-                        engine.input_texture.update_from_texture(&texture);
+                    if let Some((width, height)) = dims {
+                        if let Some(texture) = manager.syphon_output_texture() {
+                            if let Some(ref mut engine) = self.output_engine {
+                                // Zero-copy: point the renderer at the Syphon
+                                // output texture directly — no GPU copy needed.
+                                engine.input_texture.set_external_texture(texture);
+                            }
+                        }
+                        manager.clear_syphon_frame();
+                        let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.input.width = width;
+                        state.input.height = height;
                     }
-
-                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                    state.input.width = width;
-                    state.input.height = height;
                 }
             } else {
                 // CPU fallback path
@@ -111,7 +117,7 @@ impl App {
                 // Process audio routing (updates internal smoothed values)
                 // Actual application of modulation happens in render step
                 if state.audio_routing.enabled {
-                    let delta_time = 1.0 / 60.0;
+                    let delta_time = self.frame_delta_time;
                     state.audio_routing.matrix.process(&fft, delta_time);
                 }
             }
@@ -120,7 +126,7 @@ impl App {
 
     /// Update LFO phases (modulation applied in final composite step)
     pub(super) fn update_lfo(&mut self) {
-        let delta_time = 1.0 / 60.0;
+        let delta_time = self.frame_delta_time;
         let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
         let bpm = state.audio.bpm;
         let beat_phase = state.audio.beat_phase;
@@ -251,31 +257,75 @@ impl App {
         }
     }
 
+    /// Poll for background device discovery completion and update the GUI when done.
+    pub(super) fn poll_device_discovery(&mut self) {
+        let done = self.input_manager.as_mut().map_or(false, |m| m.poll_discovery());
+        if done {
+            if let (Some(ref manager), Some(ref mut gui)) =
+                (self.input_manager.as_ref(), self.control_gui.as_mut())
+            {
+                gui.update_device_lists(manager);
+            }
+            self.shared_state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .input_discovering = false;
+        }
+    }
+
     /// Update preview textures for GUI
     pub(super) fn update_preview_textures(&mut self) {
+        // Skip all GPU preview copies when previews are hidden — saves overhead
+        let show_preview = self.shared_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .show_preview;
+        if !show_preview {
+            return;
+        }
+
+        // When Syphon is active, `input_texture.texture` is None (zero-copy external path).
+        // Fall back to `render_target` so the input preview still shows something.
+        let input_uses_external = self.output_engine.as_ref()
+            .map(|e| e.input_texture.has_external_texture())
+            .unwrap_or(false);
+
         if let (Some(ref mut renderer), Some(ref gui)) =
             (self.imgui_renderer.as_mut(), self.control_gui.as_ref())
         {
+            // Single encoder/submit for both preview copies.
+            let mut encoder = renderer.device().create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("Preview Encoder") },
+            );
+            let mut any_work = false;
+
             // Update input preview
-            if let Some(input_tex) = self.output_engine.as_ref().and_then(|e| e.input_texture.texture.as_ref()) {
-                if let Some(preview_id) = gui.input_preview_texture_id {
-                    let mut encoder = renderer.device().create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Preview Update Encoder"),
-                    });
-                    renderer.update_preview_texture(preview_id, &input_tex.texture, &mut encoder);
-                    renderer.queue().submit(std::iter::once(encoder.finish()));
+            {
+                let input_src = if input_uses_external {
+                    // Syphon zero-copy path: use render_target as a proxy
+                    self.output_engine.as_ref().map(|e| &e.render_target.texture)
+                } else {
+                    self.output_engine
+                        .as_ref()
+                        .and_then(|e| e.input_texture.texture.as_ref().map(|t| &t.texture))
+                };
+                if let (Some(tex), Some(preview_id)) = (input_src, gui.input_preview_texture_id) {
+                    renderer.update_preview_texture(preview_id, tex, &mut encoder);
+                    any_work = true;
                 }
             }
 
             // Update output preview
-            if let Some(output_tex) = self.output_engine.as_ref().map(|e| &e.render_target) {
-                if let Some(preview_id) = gui.output_preview_texture_id {
-                    let mut encoder = renderer.device().create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Preview Update Encoder"),
-                    });
-                    renderer.update_preview_texture(preview_id, &output_tex.texture, &mut encoder);
-                    renderer.queue().submit(std::iter::once(encoder.finish()));
+            {
+                let output_src = self.output_engine.as_ref().map(|e| &e.render_target.texture);
+                if let (Some(tex), Some(preview_id)) = (output_src, gui.output_preview_texture_id) {
+                    renderer.update_preview_texture(preview_id, tex, &mut encoder);
+                    any_work = true;
                 }
+            }
+
+            if any_work {
+                renderer.queue().submit(std::iter::once(encoder.finish()));
             }
         }
     }
