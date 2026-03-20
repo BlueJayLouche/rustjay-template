@@ -22,7 +22,8 @@
 
 use std::sync::Arc;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows::core::Interface;
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
@@ -83,7 +84,7 @@ impl SpoutOutput {
             D3D11CreateDevice(
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
-                None,
+                HMODULE::default(),
                 D3D11_CREATE_DEVICE_FLAG(0),
                 None, // default feature levels
                 D3D11_SDK_VERSION,
@@ -184,8 +185,7 @@ impl SpoutOutput {
 
             // Get the DXGI shared handle (legacy GetSharedHandle — used by Spout2)
             let dxgi_resource: IDXGIResource = tex.cast()?;
-            let mut handle = HANDLE::default();
-            dxgi_resource.GetSharedHandle(&mut handle)?;
+            let handle = dxgi_resource.GetSharedHandle()?;
 
             log::info!(
                 "[Spout] Shared texture {}x{} created, handle={:?}",

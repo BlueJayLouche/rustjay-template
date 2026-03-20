@@ -22,7 +22,7 @@
 use std::ffi::CStr;
 
 use windows::core::Interface;
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ,
@@ -154,7 +154,7 @@ unsafe fn read_sender_info(name: &str) -> anyhow::Result<(HANDLE, u32, u32)> {
     }
 
     let info = &*(view.Value as *const SpoutSenderInfoRaw);
-    let handle = HANDLE(info.share_handle as isize);
+    let handle = HANDLE(info.share_handle as *mut _);
     let width = info.width;
     let height = info.height;
 
@@ -191,7 +191,7 @@ impl SpoutInputReceiver {
             D3D11CreateDevice(
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
-                None,
+                HMODULE::default(),
                 D3D11_CREATE_DEVICE_FLAG(0),
                 None,
                 D3D11_SDK_VERSION,
@@ -252,7 +252,7 @@ impl SpoutInputReceiver {
                     sender_name
                 ));
             }
-            if handle.0 == 0 {
+            if handle.0.is_null() {
                 return Err(anyhow::anyhow!(
                     "[Spout] sender '{}' has null share handle",
                     sender_name
