@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 /// Commands for output stream control
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputCommand {
     None,
     StartNdi,
@@ -18,12 +18,24 @@ pub enum OutputCommand {
     StartSyphon,
     #[cfg(target_os = "macos")]
     StopSyphon,
+    #[cfg(target_os = "windows")]
+    StartSpout { sender_name: String },
+    #[cfg(target_os = "windows")]
+    StopSpout,
+    #[cfg(target_os = "linux")]
+    StartV4l2 { device_path: String },
+    #[cfg(target_os = "linux")]
+    StopV4l2,
     ResizeOutput,
 }
 
 pub mod ndi_output;
 #[cfg(target_os = "macos")]
 pub mod syphon_output;
+#[cfg(target_os = "windows")]
+pub mod spout_output;
+#[cfg(target_os = "linux")]
+pub mod v4l2_output;
 
 use ndi_output::NdiOutputSender;
 
@@ -36,6 +48,14 @@ pub struct OutputManager {
     #[cfg(target_os = "macos")]
     syphon_output: Option<syphon_output::SyphonOutput>,
 
+    /// Spout output (Windows) — TODO: replace () with real type from spout crate
+    #[cfg(target_os = "windows")]
+    spout_output: Option<spout_output::SpoutOutput>,
+
+    /// V4L2 loopback output (Linux)
+    #[cfg(target_os = "linux")]
+    v4l2_output: Option<v4l2_output::V4l2LoopbackOutput>,
+
     frame_count: u64,
 }
 
@@ -46,6 +66,10 @@ impl OutputManager {
             ndi_output: None,
             #[cfg(target_os = "macos")]
             syphon_output: None,
+            #[cfg(target_os = "windows")]
+            spout_output: None,
+            #[cfg(target_os = "linux")]
+            v4l2_output: None,
             frame_count: 0,
         }
     }
@@ -93,6 +117,69 @@ impl OutputManager {
         }
     }
 
+    /// Start Spout output (Windows only)
+    /// TODO (Windows): implement this using SpoutOutput in spout_output.rs
+    #[cfg(target_os = "windows")]
+    pub fn start_spout(
+        &mut self,
+        sender_name: &str,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+    ) -> anyhow::Result<()> {
+        let spout = spout_output::SpoutOutput::new(sender_name, device, queue)?;
+        self.spout_output = Some(spout);
+        log::info!("Spout output started: {}", sender_name);
+        Ok(())
+    }
+
+    /// Stop Spout output (Windows only)
+    #[cfg(target_os = "windows")]
+    pub fn stop_spout(&mut self) {
+        if self.spout_output.take().is_some() {
+            log::info!("Spout output stopped");
+        }
+    }
+
+    /// Check if Spout is active (Windows only)
+    #[cfg(target_os = "windows")]
+    pub fn is_spout_active(&self) -> bool {
+        self.spout_output.is_some()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn is_spout_active(&self) -> bool {
+        false
+    }
+
+    /// Start V4L2 loopback output (Linux only)
+    /// TODO (Linux): implement this using V4l2LoopbackOutput in v4l2_output.rs
+    #[cfg(target_os = "linux")]
+    pub fn start_v4l2(&mut self, device_path: &str, width: u32, height: u32) -> anyhow::Result<()> {
+        let output = v4l2_output::V4l2LoopbackOutput::new(device_path, width, height)?;
+        self.v4l2_output = Some(output);
+        log::info!("V4L2 output started on {}", device_path);
+        Ok(())
+    }
+
+    /// Stop V4L2 loopback output (Linux only)
+    #[cfg(target_os = "linux")]
+    pub fn stop_v4l2(&mut self) {
+        if self.v4l2_output.take().is_some() {
+            log::info!("V4L2 output stopped");
+        }
+    }
+
+    /// Check if V4L2 is active (Linux only)
+    #[cfg(target_os = "linux")]
+    pub fn is_v4l2_active(&self) -> bool {
+        self.v4l2_output.is_some()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn is_v4l2_active(&self) -> bool {
+        false
+    }
+
     /// Submit frame to all active outputs
     pub fn submit_frame(&mut self, texture: &wgpu::Texture, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.frame_count += 1;
@@ -111,6 +198,26 @@ impl OutputManager {
         if let Some(ref mut syphon) = self.syphon_output {
             if let Err(e) = syphon.submit_frame(texture, device, queue) {
                 log::error!("Syphon output error: {}", e);
+            }
+        }
+
+        // Spout output (zero-copy on Windows)
+        #[cfg(target_os = "windows")]
+        if let Some(ref mut spout) = self.spout_output {
+            if let Err(e) = spout.submit_frame(texture, device, queue) {
+                log::error!("Spout output error: {}", e);
+            }
+        }
+
+        // V4L2 loopback output (CPU path on Linux)
+        #[cfg(target_os = "linux")]
+        if self.v4l2_output.is_some() {
+            if let Some(data) = self.read_texture_bgra(texture, device, queue) {
+                if let Some(ref mut v4l2) = self.v4l2_output {
+                    if let Err(e) = v4l2.send_frame(&data) {
+                        log::error!("V4L2 output error: {}", e);
+                    }
+                }
             }
         }
     }
@@ -203,6 +310,10 @@ impl OutputManager {
         self.stop_ndi();
         #[cfg(target_os = "macos")]
         self.stop_syphon();
+        #[cfg(target_os = "windows")]
+        self.stop_spout();
+        #[cfg(target_os = "linux")]
+        self.stop_v4l2();
     }
 }
 

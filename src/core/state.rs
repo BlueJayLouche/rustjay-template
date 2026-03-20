@@ -22,6 +22,10 @@ pub enum InputType {
     Ndi,
     #[cfg(target_os = "macos")]
     Syphon,
+    #[cfg(target_os = "windows")]
+    Spout,
+    #[cfg(target_os = "linux")]
+    V4l2,
 }
 
 impl Default for InputType {
@@ -39,6 +43,10 @@ impl InputType {
             InputType::Ndi => "NDI",
             #[cfg(target_os = "macos")]
             InputType::Syphon => "Syphon",
+            #[cfg(target_os = "windows")]
+            InputType::Spout => "Spout",
+            #[cfg(target_os = "linux")]
+            InputType::V4l2 => "V4L2",
         }
     }
 }

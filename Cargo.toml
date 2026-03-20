@@ -84,6 +84,15 @@ objc = "0.2"
 core-foundation = "0.10"
 core-graphics = "0.24"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Spout (Windows GPU texture sharing) — TODO: identify and add crate on Windows
+# See PORTING_GUIDE.md for instructions
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# V4L2 loopback output — TODO: uncomment when implementing on Linux
+# v4l = "0.14"
+# See PORTING_GUIDE.md for instructions
+
 [profile.release]
 opt-level = 3
 lto = "fat"
@@ -93,6 +102,8 @@ panic = "abort"
 [features]
 default = ["webcam"]
 webcam = ["nokhwa"]
+spout = []   # Windows Spout support — fill in dep when crate is identified
+v4l2 = []    # Linux V4L2 loopback output — fill in dep when implementing
 
 [profile.dev]
 opt-level = 1

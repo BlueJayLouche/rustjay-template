@@ -34,6 +34,18 @@ pub struct ControlGui {
     #[cfg(target_os = "macos")]
     syphon_output_name: String,
 
+    // Spout sender list and selection (Windows)
+    #[cfg(target_os = "windows")]
+    spout_senders: Vec<crate::input::SpoutSenderInfo>,
+    #[cfg(target_os = "windows")]
+    selected_spout: usize,
+    #[cfg(target_os = "windows")]
+    spout_output_name: String,
+
+    // V4L2 device path (Linux)
+    #[cfg(target_os = "linux")]
+    v4l2_device_path: String,
+
     // Preview texture IDs
     pub input_preview_texture_id: Option<imgui::TextureId>,
     pub output_preview_texture_id: Option<imgui::TextureId>,
@@ -83,6 +95,14 @@ impl ControlGui {
             ndi_output_name: ndi_name,
             #[cfg(target_os = "macos")]
             syphon_output_name: syphon_name,
+            #[cfg(target_os = "windows")]
+            spout_senders: Vec::new(),
+            #[cfg(target_os = "windows")]
+            selected_spout: 0,
+            #[cfg(target_os = "windows")]
+            spout_output_name: "RustJay".to_string(),
+            #[cfg(target_os = "linux")]
+            v4l2_device_path: "/dev/video10".to_string(),
             input_preview_texture_id: None,
             output_preview_texture_id: None,
             pending_internal_width: internal_w,
@@ -118,6 +138,10 @@ impl ControlGui {
         #[cfg(target_os = "macos")]
         {
             self.syphon_servers = input_manager.syphon_servers().to_vec();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            self.spout_senders = input_manager.spout_senders().to_vec();
         }
 
         // Audio device list is fast — refresh synchronously alongside the others

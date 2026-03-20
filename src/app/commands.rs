@@ -69,6 +69,27 @@ impl App {
                     }
                 }
             }
+            #[cfg(target_os = "windows")]
+            InputCommand::StartSpout { sender_name } => {
+                log::info!("Starting Spout: {}", sender_name);
+                if let Some(ref mut manager) = self.input_manager {
+                    match manager.start_spout(&sender_name) {
+                        Ok(_) => {
+                            let mut state = lock(&self.shared_state);
+                            state.input.is_active = true;
+                            state.input.input_type = crate::core::InputType::Spout;
+                            state.input.source_name = sender_name;
+                        }
+                        Err(e) => log::error!("Failed to start Spout: {:?}", e),
+                    }
+                }
+            }
+            #[cfg(target_os = "linux")]
+            InputCommand::StartV4l2 { device_path } => {
+                // V4L2 input on Linux is handled by nokhwa (webcam backend).
+                // This command is a placeholder for a dedicated V4L2 input if needed.
+                log::info!("StartV4l2 input command received (device: {}) — handled via webcam/nokhwa", device_path);
+            }
             InputCommand::StopInput => {
                 if let Some(ref mut manager) = self.input_manager {
                     manager.stop();
@@ -127,6 +148,40 @@ impl App {
                     engine.stop_syphon_output();
                 }
                 lock(&self.shared_state).syphon_output.enabled = false;
+            }
+            #[cfg(target_os = "windows")]
+            OutputCommand::StartSpout { sender_name } => {
+                if let Some(ref mut engine) = self.output_engine {
+                    if let Err(e) = engine.start_spout_output(&sender_name) {
+                        log::error!("Failed to start Spout output: {:?}", e);
+                    } else {
+                        log::info!("Spout output started: {}", sender_name);
+                    }
+                }
+            }
+            #[cfg(target_os = "windows")]
+            OutputCommand::StopSpout => {
+                if let Some(ref mut engine) = self.output_engine {
+                    engine.stop_spout_output();
+                }
+                log::info!("Spout output stopped");
+            }
+            #[cfg(target_os = "linux")]
+            OutputCommand::StartV4l2 { device_path } => {
+                if let Some(ref mut engine) = self.output_engine {
+                    if let Err(e) = engine.start_v4l2_output(&device_path) {
+                        log::error!("Failed to start V4L2 output: {:?}", e);
+                    } else {
+                        log::info!("V4L2 output started: {}", device_path);
+                    }
+                }
+            }
+            #[cfg(target_os = "linux")]
+            OutputCommand::StopV4l2 => {
+                if let Some(ref mut engine) = self.output_engine {
+                    engine.stop_v4l2_output();
+                }
+                log::info!("V4L2 output stopped");
             }
             OutputCommand::ResizeOutput => {
                 if let (Some(ref output_window), Some(ref mut engine)) =

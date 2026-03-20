@@ -28,6 +28,14 @@ pub enum InputCommand {
         server_name: String,
         server_uuid: String,
     },
+    #[cfg(target_os = "windows")]
+    StartSpout {
+        sender_name: String,
+    },
+    #[cfg(target_os = "linux")]
+    StartV4l2 {
+        device_path: String,
+    },
     StopInput,
     RefreshDevices,
 }
@@ -44,6 +52,30 @@ pub use webcam::{list_cameras, WebcamCapture, WebcamFrame};
 pub mod syphon_input;
 #[cfg(target_os = "macos")]
 pub use syphon_input::{SyphonInputReceiver, SyphonServerInfo};
+
+#[cfg(target_os = "windows")]
+pub mod spout_input;
+#[cfg(target_os = "windows")]
+pub use spout_input::{SpoutInputReceiver, SpoutSenderInfo};
+
+// Note: V4L2 input on Linux is handled by nokhwa (input-native maps to V4L2).
+// A separate v4l2_input module is only needed if nokhwa proves insufficient.
+
+/// Placeholder type on non-Windows platforms — the real struct lives in spout_input.rs
+#[cfg(not(target_os = "windows"))]
+#[derive(Debug, Clone)]
+pub struct SpoutSenderInfo {
+    pub name: String,
+}
+
+/// Placeholder type on non-macOS platforms — the real struct lives in syphon_input.rs
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone)]
+pub struct SyphonServerInfo {
+    pub name: String,
+    pub app_name: String,
+    pub uuid: String,
+}
 
 use crate::core::InputType;
 
@@ -62,6 +94,8 @@ struct DiscoveryResults {
     ndi: Vec<String>,
     #[cfg(target_os = "macos")]
     syphon: Vec<SyphonServerInfo>,
+    #[cfg(target_os = "windows")]
+    spout: Vec<SpoutSenderInfo>,
 }
 
 /// Manages a single video input source with hot-swappable backends
@@ -91,6 +125,10 @@ pub struct InputManager {
     #[cfg(target_os = "macos")]
     syphon_queue: Option<std::sync::Arc<wgpu::Queue>>,
 
+    // Spout (Windows only) — TODO: replace () with real type from spout crate
+    #[cfg(target_os = "windows")]
+    spout_receiver: Option<SpoutInputReceiver>,
+
     // Current frame data (CPU path)
     current_frame: Option<Vec<u8>>,
 
@@ -99,6 +137,8 @@ pub struct InputManager {
     ndi_sources: Option<Vec<String>>,
     #[cfg(target_os = "macos")]
     syphon_servers: Option<Vec<SyphonServerInfo>>,
+    #[cfg(target_os = "windows")]
+    spout_senders: Option<Vec<SpoutSenderInfo>>,
 
     // Background discovery
     discovery_rx: Option<mpsc::Receiver<DiscoveryResults>>,
@@ -125,11 +165,15 @@ impl InputManager {
             syphon_device: None,
             #[cfg(target_os = "macos")]
             syphon_queue: None,
+            #[cfg(target_os = "windows")]
+            spout_receiver: None,
             current_frame: None,
             webcam_devices: None,
             ndi_sources: None,
             #[cfg(target_os = "macos")]
             syphon_servers: None,
+            #[cfg(target_os = "windows")]
+            spout_senders: None,
             discovery_rx: None,
             is_discovering: false,
         }
@@ -186,6 +230,10 @@ impl InputManager {
         {
             self.syphon_servers = None;
         }
+        #[cfg(target_os = "windows")]
+        {
+            self.spout_senders = None;
+        }
 
         self.is_discovering = true;
         let (tx, rx) = mpsc::channel();
@@ -217,11 +265,22 @@ impl InputManager {
                 servers
             };
 
+            // TODO (Windows): implement Spout sender discovery
+            #[cfg(target_os = "windows")]
+            let spout = {
+                log::info!("[InputManager] Discovering Spout senders...");
+                let senders = spout_input::SpoutDiscovery::list_senders();
+                log::info!("[InputManager] Found {} Spout sender(s)", senders.len());
+                senders
+            };
+
             let _ = tx.send(DiscoveryResults {
                 webcam,
                 ndi,
                 #[cfg(target_os = "macos")]
                 syphon,
+                #[cfg(target_os = "windows")]
+                spout,
             });
         });
     }
@@ -241,6 +300,10 @@ impl InputManager {
             #[cfg(target_os = "macos")]
             {
                 self.syphon_servers = Some(result.syphon);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                self.spout_senders = Some(result.spout);
             }
             self.is_discovering = false;
             self.discovery_rx = None;
@@ -323,6 +386,37 @@ impl InputManager {
         Err(anyhow::anyhow!("Syphon is only available on macOS"))
     }
 
+    /// Start Spout input (Windows only)
+    /// TODO (Windows): implement this using the SpoutInputReceiver in spout_input.rs
+    #[cfg(target_os = "windows")]
+    pub fn start_spout(&mut self, sender_name: impl Into<String>) -> Result<()> {
+        let sender_name = sender_name.into();
+        self.stop();
+        let mut receiver = SpoutInputReceiver::new();
+        receiver.connect(&sender_name)?;
+        self.input_type = crate::core::InputType::Spout;
+        self.active = true;
+        self.spout_receiver = Some(receiver);
+        log::info!("Started Spout input: {}", sender_name);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn start_spout(&mut self, _sender_name: impl Into<String>) -> Result<()> {
+        Err(anyhow::anyhow!("Spout is only available on Windows"))
+    }
+
+    /// Get cached list of Spout senders (Windows only)
+    #[cfg(target_os = "windows")]
+    pub fn spout_senders(&self) -> &[SpoutSenderInfo] {
+        self.spout_senders.as_deref().unwrap_or(&[])
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn spout_senders(&self) -> &[SpoutSenderInfo] {
+        &[]
+    }
+
     /// Stop current input
     pub fn stop(&mut self) {
         if !self.active {
@@ -349,6 +443,12 @@ impl InputManager {
         #[cfg(target_os = "macos")]
         {
             self.syphon_receiver = None;
+        }
+
+        // Stop Spout
+        #[cfg(target_os = "windows")]
+        {
+            self.spout_receiver = None;
         }
 
         self.frame_receiver = None;
@@ -391,6 +491,16 @@ impl InputManager {
         {
             if syphon.try_receive_texture(device, queue) {
                 self.resolution = syphon.resolution();
+                self.has_new_frame = true;
+            }
+        }
+
+        // Handle Spout frames (zero-copy texture path on Windows)
+        // TODO (Windows): implement polling of SpoutInputReceiver
+        #[cfg(target_os = "windows")]
+        if let Some(ref mut spout) = self.spout_receiver {
+            if spout.try_receive_texture() {
+                self.resolution = spout.resolution();
                 self.has_new_frame = true;
             }
         }

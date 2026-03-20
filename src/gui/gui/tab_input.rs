@@ -113,6 +113,33 @@ impl ControlGui {
             }
         }
 
+        // Spout section (Windows only)
+        #[cfg(target_os = "windows")]
+        {
+            ui.spacing();
+            ui.separator();
+            ui.spacing();
+
+            ui.text_colored([0.0, 1.0, 1.0, 1.0], "Spout (Windows)");
+            if !self.spout_senders.is_empty() {
+                let sender_names: Vec<&str> = self.spout_senders.iter()
+                    .map(|s| s.name.as_str())
+                    .collect();
+                ui.combo_simple_string("Select Spout Sender", &mut self.selected_spout, &sender_names);
+
+                if ui.button("Start Spout") {
+                    let sender_name = self.spout_senders
+                        .get(self.selected_spout)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default();
+                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.input_command = InputCommand::StartSpout { sender_name };
+                }
+            } else {
+                ui.text_disabled("No Spout senders found");
+            }
+        }
+
         ui.spacing();
         ui.separator();
         ui.spacing();
