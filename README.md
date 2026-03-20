@@ -173,7 +173,19 @@ To enable NDI input/output, install the NDI SDK:
 
 ### Syphon Support (macOS Only)
 
-Syphon support requires the Syphon framework. The project includes local syphon crates that handle the integration automatically.
+Syphon is enabled automatically on macOS — no feature flag needed. The build system finds the framework at `../syphon-rs/syphon-lib/Syphon.framework`.
+
+**Requirements:** The `syphon-rs` repo must be present as a sibling directory:
+```
+developer/rust/
+├── syphon-rs/          ← must exist
+└── rustjay-template/
+```
+
+If your layout differs, set `SYPHON_FRAMEWORK_DIR` before building:
+```bash
+SYPHON_FRAMEWORK_DIR=/path/to/syphon-rs/syphon-lib cargo build --release
+```
 
 ## Running
 
@@ -406,9 +418,9 @@ The application uses `Bgra8Unorm` throughout for:
 
 The build script (`build.rs`) auto-detects Syphon and NDI paths and embeds the correct rpaths in the binary. If you hit a `dyld` error:
 
-1. **Syphon**: the script looks for `Syphon.framework` at `<workspace>/../crates/syphon/syphon-lib/`. If your layout differs, set `SYPHON_FRAMEWORK_DIR` to the directory containing the framework before building:
+1. **Syphon**: the script looks for `Syphon.framework` at `../syphon-rs/syphon-lib/`. If your layout differs, set `SYPHON_FRAMEWORK_DIR` to the directory containing the framework before building:
    ```bash
-   SYPHON_FRAMEWORK_DIR=/path/to/syphon-lib cargo build --release
+   SYPHON_FRAMEWORK_DIR=/path/to/syphon-rs/syphon-lib cargo build --release
    ```
 2. **NDI**: the script checks `/usr/local/lib` and `/Library/NDI SDK for Apple/lib/macOS`. Install the NDI SDK and rebuild.
 3. If you built the binary on another machine and copied it over, it will have the wrong rpath baked in — always rebuild from source on the target machine.
