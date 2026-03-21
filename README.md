@@ -29,13 +29,15 @@ cargo run
 ### Input Sources
 - **Webcam** (via nokhwa)
 - **NDI** (Network Device Interface via grafton-ndi)
-- **Syphon** (macOS frame sharing - macOS only)
+- **Syphon** (macOS GPU texture sharing - macOS only)
+- **Spout** (Windows GPU texture sharing - Windows only)
 - **Test pattern**
 
 ### Output Destinations
 - **Screen output** (fullscreen/windowed)
 - **NDI output**
 - **Syphon output** (macOS only)
+- **Spout output** (Windows only)
 
 ### Modulation System
 
@@ -146,6 +148,12 @@ This prevents feedback loops and ensures stable base values while allowing expre
 - Rust 1.75+
 - NDI Runtime (optional, for NDI support)
 
+### Windows
+- Windows 10/11 (64-bit)
+- [Rust](https://rustup.rs/) 1.75+ with the `x86_64-pc-windows-msvc` toolchain
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload — required by the MSVC toolchain)
+- NDI Runtime (optional, for NDI support)
+
 ### Linux
 - Vulkan-capable GPU
 - Rust 1.75+
@@ -186,6 +194,19 @@ If your layout differs, set `SYPHON_FRAMEWORK_DIR` before building:
 ```bash
 SYPHON_FRAMEWORK_DIR=/path/to/syphon-rs/syphon-lib cargo build --release
 ```
+
+### Spout Support (Windows Only)
+
+Spout is enabled automatically on Windows. No extra dependencies are required — the Spout sender protocol is implemented directly using the Windows D3D11 and DXGI APIs (via the `windows` crate). No C++ toolchain extras or LLVM are needed.
+
+**Build and run**
+
+```powershell
+cargo build --release
+cargo run --release
+```
+
+Open Resolume Arena, OBS (with [OBS-Spout2-Plugin](https://github.com/Off-World-Live/obs-spout2-plugin)), or any Spout-capable app on the same machine and verify texture sharing works via the **Input** and **Output** tabs.
 
 ## Running
 
@@ -456,6 +477,20 @@ cargo run -- --list-ndi
 - Ensure firewall allows port 8080
 - Try accessing via localhost first: `http://127.0.0.1:8080/rustjay`
 - Check macOS Local Network permissions for the app
+
+### Spout senders not appearing in the Input tab
+
+- Click **Refresh Sources** — discovery runs on a background thread
+- Verify the sending app (Resolume, OBS, etc.) is running and has an active Spout output
+- Both apps must be on the same machine (Spout is local GPU sharing, not network)
+- Check the app log for `[Spout] Discovery found N sender(s)` messages
+
+### Spout output not visible in receiving apps
+
+- Start the output from the **Output** tab → enter a sender name → **Start Spout Output**
+- Verify in Resolume/OBS that the sender name matches what you entered
+- The D3D11 shared texture uses the BGRA8 format; most receiving apps handle this automatically
+- Check the app log for `[Spout] Registered sender` and `[Spout] Sender info written` messages
 
 ### Performance issues
 

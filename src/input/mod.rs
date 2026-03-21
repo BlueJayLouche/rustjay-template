@@ -495,13 +495,16 @@ impl InputManager {
             }
         }
 
-        // Handle Spout frames (zero-copy texture path on Windows)
-        // TODO (Windows): implement polling of SpoutInputReceiver
+        // Handle Spout frames (CPU path on Windows — bytes → current_frame → InputTexture)
         #[cfg(target_os = "windows")]
         if let Some(ref mut spout) = self.spout_receiver {
             if spout.try_receive_texture() {
                 self.resolution = spout.resolution();
                 self.has_new_frame = true;
+                // Move pixel bytes into current_frame so take_frame() / InputTexture::update() works
+                if let Some(pixels) = spout.take_pixels() {
+                    self.current_frame = Some(pixels);
+                }
             }
         }
     }

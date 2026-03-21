@@ -76,8 +76,8 @@ imgui-winit-support = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Syphon (macOS GPU texture sharing)
-syphon-core = { path = "../syphon-rs/syphon-core" }
-syphon-wgpu = { path = "../syphon-rs/syphon-wgpu" }
+syphon-core = { git = "https://github.com/BlueJayLouche/syphon-rs", package = "syphon-core" }
+syphon-wgpu = { git = "https://github.com/BlueJayLouche/syphon-rs", package = "syphon-wgpu" }
 metal = "0.29"
 cocoa = "0.25"
 objc = "0.2"
@@ -85,8 +85,16 @@ core-foundation = "0.10"
 core-graphics = "0.24"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# Spout (Windows GPU texture sharing) — TODO: identify and add crate on Windows
-# See PORTING_GUIDE.md for instructions
+# Spout (Windows GPU texture sharing) — implemented via windows crate D3D11 directly
+windows = { version = "0.61", features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_Security",
+]}
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # V4L2 loopback output — TODO: uncomment when implementing on Linux
@@ -102,7 +110,7 @@ panic = "abort"
 [features]
 default = ["webcam"]
 webcam = ["nokhwa"]
-spout = []   # Windows Spout support — fill in dep when crate is identified
+spout = []   # Windows Spout support (dep is in [target.windows.dependencies])
 v4l2 = []    # Linux V4L2 loopback output — fill in dep when implementing
 
 [profile.dev]

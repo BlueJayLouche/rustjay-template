@@ -328,3 +328,50 @@ under a `## Notes` section so the macOS host knows what was chosen and why. For 
 - Which Spout crate was used and why
 - Whether format conversion was needed for V4L2
 - Any platform-specific quirks
+
+---
+
+## Notes (Windows — Spout)
+
+### Spout Input
+
+**Crate chosen:** None — implemented directly using the `windows` crate (same as output).
+
+**Why:** `spout_texture_share = "0.1"` (the only available receiver crate) uses `autocxx`
+for C++ bindings, which panics in `autocxx-bindgen` on MSVC 2019+ due to unnamed enums
+inside template classes in `<xhash>`. Rather than fight the C++ toolchain, we implement
+the Spout receiver protocol in pure Rust:
+1. Open `"SpoutSenderNames"` Windows named shared memory to list active senders.
+2. Open per-sender named shared memory to read the DXGI `GetSharedHandle` handle.
+3. Call `ID3D11Device::OpenSharedResource` to open the shared texture on our D3D11 device.
+4. Copy to a staging texture, map it, and read BGRA pixels into the CPU buffer.
+
+**Path:** CPU, not zero-copy. Pixels arrive as `Vec<u8>` (BGRA, row-major) and are
+uploaded to a wgpu texture via the existing `InputTexture::update()` path — the same
+path webcam and NDI use. Zero-copy (D3D11 ↔ D3D12 interop) is deferred.
+
+**No extra build dependencies required** — everything uses the `windows` crate which
+is already a Windows-target dependency.
+
+### Spout Output
+
+**Approach:** No maintained Rust Spout2 *sender* crate exists, so the Spout sender
+protocol is implemented directly using the `windows` crate's D3D11 and DXGI bindings.
+
+**Steps:**
+1. A standalone D3D11 device is created (wgpu on Windows uses D3D12, so a separate
+   D3D11 device is used solely for Spout sharing).
+2. A `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX` texture (BGRA8) is created and its
+   DXGI shared handle is obtained via `IDXGIResource::GetSharedHandle`.
+3. The sender is registered in two Windows named shared-memory mappings that Spout
+   uses as its discovery registry: `"SpoutSenderNames"` (global list) and a per-sender
+   block named after the sender (contains width, height, DXGI format, share handle).
+4. Each frame: wgpu render target → CPU bytes (staging buffer readback) →
+   `ID3D11DeviceContext::UpdateSubresource` under the DXGI keyed mutex.
+
+**Keyed mutex protocol:** Both sender and receiver use key value `0`. The sender calls
+`AcquireSync(0, 16ms)` before writing and `ReleaseSync(0)` after.
+
+**SpoutSenderInfo struct layout (x64):** 32 bytes total — width(4), height(4),
+dwFormat(4), pad(4), shareHandle(8), NameCount(4), pad(4). Matches Spout2 SDK
+`SpoutSenderNames.h` with natural x64 alignment.
