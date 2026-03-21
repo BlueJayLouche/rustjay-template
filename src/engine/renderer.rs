@@ -251,8 +251,13 @@ impl WgpuEngine {
         self.output_manager.stop_v4l2();
     }
 
-    /// Render a frame
-    pub fn render(&mut self) {
+    /// Render a frame.
+    ///
+    /// The shader pipeline and output sinks always run regardless of window
+    /// visibility.  When `occluded` is true the screen blit is skipped so
+    /// that Syphon / NDI / Spout keep streaming at full frame rate even when
+    /// the output window is hidden behind other windows.
+    pub fn render(&mut self, occluded: bool) {
         let (hsb_params, color_enabled) = {
             let state = match self.shared_state.lock() {
                 Ok(s) => s,
@@ -286,24 +291,6 @@ impl WgpuEngine {
                 state.color_enabled,
             )
         };
-
-        let surface_texture = match self.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(_) => {
-                self.surface.configure(&self.device, &self.surface_config);
-                return;
-            }
-        };
-
-        let surface_view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Render Encoder"),
-                });
 
         // Ensure a fallback input texture exists when no source is active.
         if self.input_texture.binding_view().is_none() {
@@ -353,6 +340,13 @@ impl WgpuEngine {
             bytemuck::bytes_of(&hsb_uniforms),
         );
 
+        // ── Stage 1: Run shader pipeline to render target (always) ──────
+        let mut encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Pipeline Encoder"),
+                });
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass"),
@@ -376,19 +370,44 @@ impl WgpuEngine {
             render_pass.draw(0..6, 0..1);
         }
 
-        self.blit_pipeline.blit(
-            &mut encoder,
-            &self.blit_bind_group,
-            &surface_view,
-            &self.vertex_buffer,
-        );
-
         self.queue.submit(std::iter::once(encoder.finish()));
-        surface_texture.present();
 
+        // ── Stage 2: Submit to output sinks (always) ────────────────────
         self.output_manager
             .submit_frame(&self.render_target.texture, &self.device, &self.queue);
 
+        // ── Stage 3: Blit to screen surface (skip when occluded) ────────
+        if !occluded {
+            match self.surface.get_current_texture() {
+                Ok(surface_texture) => {
+                    let surface_view = surface_texture
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+
+                    let mut blit_encoder =
+                        self.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("Blit Encoder"),
+                            });
+
+                    self.blit_pipeline.blit(
+                        &mut blit_encoder,
+                        &self.blit_bind_group,
+                        &surface_view,
+                        &self.vertex_buffer,
+                    );
+
+                    self.queue.submit(std::iter::once(blit_encoder.finish()));
+                    surface_texture.present();
+                }
+                Err(e) => {
+                    log::debug!("Surface unavailable, reconfiguring: {}", e);
+                    self.surface.configure(&self.device, &self.surface_config);
+                }
+            }
+        }
+
+        // ── FPS tracking ────────────────────────────────────────────────
         self.fps_frame_count += 1;
         let elapsed = self.fps_last_time.elapsed();
         if elapsed.as_secs_f32() >= 0.5 {
@@ -407,5 +426,11 @@ impl WgpuEngine {
         }
 
         self.frame_count += 1;
+    }
+
+    /// Drain the async readback pool during shutdown while the device is
+    /// still alive.
+    pub fn drain_readback(&mut self) {
+        self.output_manager.drain_readback(&self.device);
     }
 }

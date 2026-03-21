@@ -76,6 +76,10 @@ struct App {
     // Modifier state
     shift_pressed: bool,
 
+    // Output window visibility — when occluded we skip the screen blit
+    // but keep the shader pipeline and output sinks running at full speed.
+    output_occluded: bool,
+
     // Frame timing for accurate delta-time
     last_frame_time: std::time::Instant,
     frame_delta_time: f32,
@@ -170,6 +174,7 @@ impl App {
             web_command_tx,
             config_manager,
             shift_pressed: false,
+            output_occluded: false,
             last_frame_time: std::time::Instant::now(),
             frame_delta_time: 1.0 / 60.0,
         }

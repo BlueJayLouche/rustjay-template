@@ -44,6 +44,9 @@ fn main() {
             }
         }
         
+        // ===== AVFoundation (camera authorization) =====
+        println!("cargo:rustc-link-lib=framework=AVFoundation");
+
         // Also add common framework/library search paths
         println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
         println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path/../Frameworks");

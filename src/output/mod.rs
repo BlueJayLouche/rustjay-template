@@ -5,6 +5,11 @@
 //! - Syphon (macOS GPU texture sharing)
 //! - Spout (Windows GPU texture sharing) - TODO
 //! - v4l2loopback (Linux virtual camera) - TODO
+//!
+//! GPU readback uses a double-buffered staging pool so the render thread
+//! never blocks waiting for a GPU→CPU copy to complete.  Each frame the
+//! render thread submits a copy into the *current* staging slot and harvests
+//! the *previous* slot's data (which has had a full frame to finish mapping).
 
 use std::sync::Arc;
 
@@ -39,6 +44,169 @@ pub mod v4l2_output;
 
 use ndi_output::NdiOutputSender;
 
+// ---------------------------------------------------------------------------
+// Async GPU readback pool
+// ---------------------------------------------------------------------------
+
+/// Number of staging buffers in the pool.  Two is enough: one being filled
+/// by the GPU while the CPU reads the other.
+const READBACK_SLOTS: usize = 2;
+
+/// State of a single staging buffer slot.
+enum SlotState {
+    /// Buffer is idle and available for a new copy.
+    Available,
+    /// A copy has been submitted and `map_async` requested; waiting for GPU.
+    Pending {
+        buffer: wgpu::Buffer,
+        width: u32,
+        height: u32,
+        ready: std::sync::mpsc::Receiver<bool>,
+    },
+}
+
+/// Double-buffered staging pool for non-blocking GPU→CPU readback.
+struct ReadbackPool {
+    slots: Vec<SlotState>,
+    /// Index of the slot to write into this frame.
+    current: usize,
+}
+
+impl ReadbackPool {
+    fn new() -> Self {
+        let mut slots = Vec::with_capacity(READBACK_SLOTS);
+        for _ in 0..READBACK_SLOTS {
+            slots.push(SlotState::Available);
+        }
+        Self { slots, current: 0 }
+    }
+
+    /// Harvest the *previous* slot if its map has completed, returning the
+    /// BGRA pixel data.  This never blocks — if the GPU hasn't finished yet
+    /// we simply skip this frame's readback.
+    fn harvest_previous(&mut self) -> Option<(Vec<u8>, u32, u32)> {
+        let prev = (self.current + READBACK_SLOTS - 1) % READBACK_SLOTS;
+        let slot = &mut self.slots[prev];
+
+        match slot {
+            SlotState::Pending { buffer, width, height, ready } => {
+                // Non-blocking check — is the map complete?
+                match ready.try_recv() {
+                    Ok(true) => {
+                        let w = *width;
+                        let h = *height;
+                        let data = buffer.slice(..).get_mapped_range().to_vec();
+                        buffer.unmap();
+                        // Move buffer out so we can reuse the slot
+                        let buf = match std::mem::replace(slot, SlotState::Available) {
+                            SlotState::Pending { buffer, .. } => buffer,
+                            _ => unreachable!(),
+                        };
+                        // We could cache `buf` for reuse, but wgpu buffers
+                        // can't be re-mapped after unmap without a new copy,
+                        // and the size may change.  Drop it; a new one is
+                        // cheap relative to the copy itself.
+                        drop(buf);
+                        Some((data, w, h))
+                    }
+                    _ => None,
+                }
+            }
+            SlotState::Available => None,
+        }
+    }
+
+    /// Submit a non-blocking copy from `texture` into the current staging
+    /// slot and request an async map.
+    fn submit_copy(
+        &mut self,
+        texture: &wgpu::Texture,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) {
+        let width = texture.width();
+        let height = texture.height();
+        let bytes_per_row = width * 4;
+        let buffer_size = (bytes_per_row * height) as u64;
+
+        // If the current slot is still pending (GPU too slow), drop it.
+        if matches!(self.slots[self.current], SlotState::Pending { .. }) {
+            self.slots[self.current] = SlotState::Available;
+            log::debug!("Readback slot {} overwritten (GPU too slow)", self.current);
+        }
+
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Readback Staging"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Readback Copy"),
+        });
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Request async map — the callback signals via channel.
+        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        staging_buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result.is_ok());
+            });
+
+        self.slots[self.current] = SlotState::Pending {
+            buffer: staging_buffer,
+            width,
+            height,
+            ready: rx,
+        };
+
+        self.current = (self.current + 1) % READBACK_SLOTS;
+    }
+
+    /// Drain any pending slots (used during shutdown / output stop).
+    fn drain(&mut self, device: &wgpu::Device) {
+        for slot in &mut self.slots {
+            if matches!(slot, SlotState::Pending { .. }) {
+                // Poll once to let the GPU finish, then discard.
+                device.poll(wgpu::PollType::Wait).ok();
+                if let SlotState::Pending { buffer, .. } = std::mem::replace(slot, SlotState::Available) {
+                    // Buffer may or may not be mapped; dropping handles cleanup.
+                    drop(buffer);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OutputManager
+// ---------------------------------------------------------------------------
+
 /// Manages all video outputs
 pub struct OutputManager {
     /// NDI network output
@@ -56,6 +224,9 @@ pub struct OutputManager {
     #[cfg(target_os = "linux")]
     v4l2_output: Option<v4l2_output::V4l2LoopbackOutput>,
 
+    /// Async readback pool for CPU-path outputs (NDI, V4L2).
+    readback_pool: ReadbackPool,
+
     frame_count: u64,
 }
 
@@ -70,6 +241,7 @@ impl OutputManager {
             spout_output: None,
             #[cfg(target_os = "linux")]
             v4l2_output: None,
+            readback_pool: ReadbackPool::new(),
             frame_count: 0,
         }
     }
@@ -180,17 +352,49 @@ impl OutputManager {
         false
     }
 
-    /// Submit frame to all active outputs
+    /// Returns true if any CPU-path output (NDI, V4L2) needs readback.
+    fn needs_readback(&self) -> bool {
+        if self.ndi_output.is_some() {
+            return true;
+        }
+        #[cfg(target_os = "linux")]
+        if self.v4l2_output.is_some() {
+            return true;
+        }
+        false
+    }
+
+    /// Submit frame to all active outputs.
+    ///
+    /// GPU-path outputs (Syphon, Spout) receive the texture directly.
+    /// CPU-path outputs (NDI, V4L2) use the async readback pool — the
+    /// render thread never blocks waiting for a GPU→CPU copy.
     pub fn submit_frame(&mut self, texture: &wgpu::Texture, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.frame_count += 1;
 
-        // NDI output - requires GPU readback
-        if self.ndi_output.is_some() {
-            if let Some(data) = self.read_texture_bgra(texture, device, queue) {
+        // CPU-path outputs: harvest previous frame's readback, then submit
+        // a new copy for this frame.
+        if self.needs_readback() {
+            // Non-blocking poll to nudge the GPU — helps the previous
+            // frame's map_async complete before we try to harvest.
+            device.poll(wgpu::PollType::Poll).ok();
+
+            // Harvest the previous frame's data (never blocks).
+            if let Some((data, width, height)) = self.readback_pool.harvest_previous() {
                 if let Some(ref sender) = self.ndi_output {
-                    sender.submit_frame(&data, texture.width(), texture.height());
+                    sender.submit_frame(&data, width, height);
+                }
+
+                #[cfg(target_os = "linux")]
+                if let Some(ref mut v4l2) = self.v4l2_output {
+                    if let Err(e) = v4l2.send_frame(&data) {
+                        log::error!("V4L2 output error: {}", e);
+                    }
                 }
             }
+
+            // Submit a non-blocking copy for *this* frame.
+            self.readback_pool.submit_copy(texture, device, queue);
         }
 
         // Syphon output (zero-copy on macOS)
@@ -207,85 +411,6 @@ impl OutputManager {
             if let Err(e) = spout.submit_frame(texture, device, queue) {
                 log::error!("Spout output error: {}", e);
             }
-        }
-
-        // V4L2 loopback output (CPU path on Linux)
-        #[cfg(target_os = "linux")]
-        if self.v4l2_output.is_some() {
-            if let Some(data) = self.read_texture_bgra(texture, device, queue) {
-                if let Some(ref mut v4l2) = self.v4l2_output {
-                    if let Err(e) = v4l2.send_frame(&data) {
-                        log::error!("V4L2 output error: {}", e);
-                    }
-                }
-            }
-        }
-    }
-    
-    /// Read texture data back to CPU as BGRA
-    fn read_texture_bgra(&self, texture: &wgpu::Texture, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<u8>> {
-        let width = texture.width();
-        let height = texture.height();
-        let bytes_per_row = width * 4;
-        let buffer_size = (bytes_per_row * height) as u64;
-        
-        // Create staging buffer
-        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("NDI Readback Buffer"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        
-        // Copy texture to buffer
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("NDI Readback Encoder"),
-        });
-        
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging_buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        
-        queue.submit(std::iter::once(encoder.finish()));
-        
-        // Map and read data
-        let buffer_slice = staging_buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel::<bool>();
-        
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result.is_ok());
-        });
-        
-        // Poll until mapped
-        device.poll(wgpu::PollType::Wait).ok();
-        
-        // Check if mapping succeeded and read data
-        if rx.recv().ok()? {
-            let data = buffer_slice.get_mapped_range();
-            let bytes = data.to_vec();
-            drop(data);
-            staging_buffer.unmap();
-            Some(bytes)
-        } else {
-            None
         }
     }
 
@@ -314,6 +439,11 @@ impl OutputManager {
         self.stop_spout();
         #[cfg(target_os = "linux")]
         self.stop_v4l2();
+    }
+
+    /// Drain readback pool (call when GPU device is still alive).
+    pub fn drain_readback(&mut self, device: &wgpu::Device) {
+        self.readback_pool.drain(device);
     }
 }
 

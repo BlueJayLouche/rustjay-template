@@ -267,6 +267,10 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                    WindowEvent::Occluded(occluded) => {
+                        self.output_occluded = occluded;
+                        log::debug!("Output window occluded: {}", occluded);
+                    }
                     WindowEvent::Resized(size) => {
                         if let Some(ref mut engine) = self.output_engine {
                             engine.resize(size.width, size.height);
@@ -274,7 +278,7 @@ impl ApplicationHandler for App {
                     }
                     WindowEvent::RedrawRequested => {
                         if let Some(ref mut engine) = self.output_engine {
-                            engine.render();
+                            engine.render(self.output_occluded);
                             self.update_preview_textures();
                         }
                     }
@@ -402,6 +406,11 @@ impl ApplicationHandler for App {
         }
         if let Some(ref mut manager) = self.input_manager {
             manager.stop();
+        }
+
+        // Drain readback pool while the GPU device is still alive.
+        if let Some(ref mut engine) = self.output_engine {
+            engine.drain_readback();
         }
 
         log::info!("Shutdown complete");

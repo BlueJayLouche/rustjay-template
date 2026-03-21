@@ -20,6 +20,10 @@
 //! - `Shift+F`: Toggle fullscreen on output window
 //! - `Escape`: Exit application
 
+#[cfg(target_os = "macos")]
+#[macro_use]
+extern crate objc;
+
 use env_logger;
 use log::info;
 use std::sync::{Arc, Mutex};
