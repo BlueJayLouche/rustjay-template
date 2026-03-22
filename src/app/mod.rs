@@ -193,7 +193,7 @@ impl App {
             };
 
             output_window.set_fullscreen(fullscreen_mode);
-            output_window.set_cursor_visible(!state.output_fullscreen);
+            output_window.set_cursor_visible(false);
             log::info!("Fullscreen: {}", state.output_fullscreen);
         }
     }

@@ -49,7 +49,7 @@ impl ApplicationHandler for App {
             if fullscreen {
                 window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
             }
-            window.set_cursor_visible(!fullscreen);
+            window.set_cursor_visible(false);
 
             self.output_window = Some(Arc::clone(&window));
 
@@ -172,11 +172,7 @@ impl ApplicationHandler for App {
                         event_loop.exit();
                     }
                     WindowEvent::CursorEntered { .. } => {
-                        let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                        output_window.set_cursor_visible(!state.output_fullscreen);
-                    }
-                    WindowEvent::CursorLeft { .. } => {
-                        output_window.set_cursor_visible(true);
+                        output_window.set_cursor_visible(false);
                     }
                     WindowEvent::KeyboardInput { event, .. } => {
                         // Track shift key
