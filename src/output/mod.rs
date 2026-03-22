@@ -17,7 +17,9 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputCommand {
     None,
+    #[cfg(feature = "ndi")]
     StartNdi,
+    #[cfg(feature = "ndi")]
     StopNdi,
     #[cfg(target_os = "macos")]
     StartSyphon,
@@ -34,6 +36,7 @@ pub enum OutputCommand {
     ResizeOutput,
 }
 
+#[cfg(feature = "ndi")]
 pub mod ndi_output;
 #[cfg(target_os = "macos")]
 pub mod syphon_output;
@@ -42,6 +45,7 @@ pub mod spout_output;
 #[cfg(target_os = "linux")]
 pub mod v4l2_output;
 
+#[cfg(feature = "ndi")]
 use ndi_output::NdiOutputSender;
 
 // ---------------------------------------------------------------------------
@@ -210,6 +214,7 @@ impl ReadbackPool {
 /// Manages all video outputs
 pub struct OutputManager {
     /// NDI network output
+    #[cfg(feature = "ndi")]
     ndi_output: Option<NdiOutputSender>,
 
     /// Syphon output (macOS)
@@ -234,6 +239,7 @@ impl OutputManager {
     /// Create a new output manager
     pub fn new() -> Self {
         Self {
+            #[cfg(feature = "ndi")]
             ndi_output: None,
             #[cfg(target_os = "macos")]
             syphon_output: None,
@@ -247,6 +253,7 @@ impl OutputManager {
     }
 
     /// Start NDI output
+    #[cfg(feature = "ndi")]
     pub fn start_ndi(
         &mut self,
         name: &str,
@@ -260,12 +267,27 @@ impl OutputManager {
         Ok(())
     }
 
+    #[cfg(not(feature = "ndi"))]
+    pub fn start_ndi(
+        &mut self,
+        _name: &str,
+        _width: u32,
+        _height: u32,
+        _include_alpha: bool,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("NDI support not compiled. Enable the 'ndi' feature."))
+    }
+
     /// Stop NDI output
+    #[cfg(feature = "ndi")]
     pub fn stop_ndi(&mut self) {
         if self.ndi_output.take().is_some() {
             log::info!("NDI output stopped");
         }
     }
+
+    #[cfg(not(feature = "ndi"))]
+    pub fn stop_ndi(&mut self) {}
 
     /// Start Syphon output (macOS only)
     #[cfg(target_os = "macos")]
@@ -354,6 +376,7 @@ impl OutputManager {
 
     /// Returns true if any CPU-path output (NDI, V4L2) needs readback.
     fn needs_readback(&self) -> bool {
+        #[cfg(feature = "ndi")]
         if self.ndi_output.is_some() {
             return true;
         }
@@ -381,6 +404,7 @@ impl OutputManager {
 
             // Harvest the previous frame's data (never blocks).
             if let Some((data, width, height)) = self.readback_pool.harvest_previous() {
+                #[cfg(feature = "ndi")]
                 if let Some(ref sender) = self.ndi_output {
                     sender.submit_frame(&data, width, height);
                 }
@@ -415,8 +439,14 @@ impl OutputManager {
     }
 
     /// Check if NDI is active
+    #[cfg(feature = "ndi")]
     pub fn is_ndi_active(&self) -> bool {
         self.ndi_output.is_some()
+    }
+
+    #[cfg(not(feature = "ndi"))]
+    pub fn is_ndi_active(&self) -> bool {
+        false
     }
 
     /// Check if Syphon is active (macOS only)

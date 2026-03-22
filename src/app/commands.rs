@@ -40,6 +40,7 @@ impl App {
                     }
                 }
             }
+            #[cfg(feature = "ndi")]
             InputCommand::StartNdi { source_name } => {
                 log::info!("Starting NDI: {}", source_name);
                 if let Some(ref mut manager) = self.input_manager {
@@ -112,6 +113,7 @@ impl App {
         let command = std::mem::replace(&mut lock(&self.shared_state).output_command, OutputCommand::None);
 
         match command {
+            #[cfg(feature = "ndi")]
             OutputCommand::StartNdi => {
                 if let Some(ref mut engine) = self.output_engine {
                     let (name, include_alpha) = {
@@ -125,6 +127,7 @@ impl App {
                     }
                 }
             }
+            #[cfg(feature = "ndi")]
             OutputCommand::StopNdi => {
                 if let Some(ref mut engine) = self.output_engine {
                     engine.stop_ndi_output();

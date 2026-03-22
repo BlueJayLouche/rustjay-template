@@ -67,7 +67,9 @@ pub struct AppSettings {
     pub audio_device: Option<String>,
     
     /// NDI output settings
+    #[cfg(feature = "ndi")]
     pub ndi_stream_name: String,
+    #[cfg(feature = "ndi")]
     pub ndi_include_alpha: bool,
     
     /// Syphon output settings (macOS)
@@ -102,7 +104,9 @@ impl Default for AppSettings {
             audio_normalize: true,
             audio_pink_noise: false,
             audio_device: None,
+            #[cfg(feature = "ndi")]
             ndi_stream_name: "RustJay Output".to_string(),
+            #[cfg(feature = "ndi")]
             ndi_include_alpha: false,
             #[cfg(target_os = "macos")]
             syphon_server_name: "RustJay".to_string(),
@@ -190,8 +194,11 @@ impl AppSettings {
         state.audio.normalize = self.audio_normalize;
         state.audio.pink_noise_shaping = self.audio_pink_noise;
         state.audio.selected_device = self.audio_device.clone();
-        state.ndi_output.stream_name = self.ndi_stream_name.clone();
-        state.ndi_output.include_alpha = self.ndi_include_alpha;
+        #[cfg(feature = "ndi")]
+        {
+            state.ndi_output.stream_name = self.ndi_stream_name.clone();
+            state.ndi_output.include_alpha = self.ndi_include_alpha;
+        }
         #[cfg(target_os = "macos")]
         {
             state.syphon_output.server_name = self.syphon_server_name.clone();
@@ -215,7 +222,9 @@ impl AppSettings {
             audio_normalize: state.audio.normalize,
             audio_pink_noise: state.audio.pink_noise_shaping,
             audio_device: state.audio.selected_device.clone(),
+            #[cfg(feature = "ndi")]
             ndi_stream_name: state.ndi_output.stream_name.clone(),
+            #[cfg(feature = "ndi")]
             ndi_include_alpha: state.ndi_output.include_alpha,
             #[cfg(target_os = "macos")]
             syphon_server_name: state.syphon_output.server_name.clone(),

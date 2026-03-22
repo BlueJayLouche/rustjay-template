@@ -19,6 +19,7 @@ pub use crate::web::WebControlCommand as WebCommand;
 pub enum InputType {
     None,
     Webcam,
+    #[cfg(feature = "ndi")]
     Ndi,
     #[cfg(target_os = "macos")]
     Syphon,
@@ -40,6 +41,7 @@ impl InputType {
         match self {
             InputType::None => "None",
             InputType::Webcam => "Webcam",
+            #[cfg(feature = "ndi")]
             InputType::Ndi => "NDI",
             #[cfg(target_os = "macos")]
             InputType::Syphon => "Syphon",
@@ -153,6 +155,7 @@ impl Default for AudioState {
 }
 
 /// NDI output state
+#[cfg(feature = "ndi")]
 #[derive(Debug, Clone, Default)]
 pub struct NdiOutputState {
     /// Output stream name
@@ -231,6 +234,7 @@ pub struct SharedState {
     pub lfo: LfoState,
 
     // NDI Output
+    #[cfg(feature = "ndi")]
     pub ndi_output: NdiOutputState,
     pub output_command: OutputCommand,
 
@@ -333,6 +337,7 @@ impl SharedState {
             audio_command: AudioCommand::None,
             audio_routing: crate::audio::routing::AudioRoutingState::new(),
 
+            #[cfg(feature = "ndi")]
             ndi_output: NdiOutputState {
                 stream_name: "RustJay Output".to_string(),
                 is_active: false,

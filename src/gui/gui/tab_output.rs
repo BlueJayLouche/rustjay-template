@@ -4,9 +4,14 @@ use crate::core::OutputCommand;
 impl ControlGui {
     /// Build the Output tab
     pub(super) fn build_output_tab(&mut self, ui: &imgui::Ui) {
-        let (ndi_active, fullscreen) = {
+        let fullscreen = {
             let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-            (state.ndi_output.is_active, state.output_fullscreen)
+            state.output_fullscreen
+        };
+        #[cfg(feature = "ndi")]
+        let ndi_active = {
+            let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+            state.ndi_output.is_active
         };
 
         ui.text("Output Settings");
@@ -21,26 +26,29 @@ impl ControlGui {
 
         ui.text_disabled("Press Shift+F to toggle fullscreen");
 
-        ui.spacing();
-        ui.separator();
-        ui.spacing();
-
         // NDI Output
-        ui.text_colored([0.0, 1.0, 0.5, 1.0], "NDI Output");
-        ui.input_text("Stream Name", &mut self.ndi_output_name).build();
+        #[cfg(feature = "ndi")]
+        {
+            ui.spacing();
+            ui.separator();
+            ui.spacing();
 
-        if !ndi_active {
-            if ui.button("Start NDI Output") {
-                let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                state.ndi_output.stream_name = self.ndi_output_name.clone();
-                state.output_command = OutputCommand::StartNdi;
+            ui.text_colored([0.0, 1.0, 0.5, 1.0], "NDI Output");
+            ui.input_text("Stream Name", &mut self.ndi_output_name).build();
+
+            if !ndi_active {
+                if ui.button("Start NDI Output") {
+                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.ndi_output.stream_name = self.ndi_output_name.clone();
+                    state.output_command = OutputCommand::StartNdi;
+                }
+            } else {
+                if ui.button("Stop NDI Output") {
+                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.output_command = OutputCommand::StopNdi;
+                }
+                ui.text_colored([0.0, 1.0, 0.0, 1.0], "NDI Active");
             }
-        } else {
-            if ui.button("Stop NDI Output") {
-                let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                state.output_command = OutputCommand::StopNdi;
-            }
-            ui.text_colored([0.0, 1.0, 0.0, 1.0], "NDI Active");
         }
 
         // Syphon Output (macOS)

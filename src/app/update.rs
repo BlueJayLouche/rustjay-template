@@ -6,6 +6,7 @@ impl App {
     pub(super) fn update_input(&mut self) {
         if let Some(ref mut manager) = self.input_manager {
             // Detect NDI source loss and surface it in shared state
+            #[cfg(feature = "ndi")]
             if manager.input_type() == InputType::Ndi && manager.is_ndi_source_lost() {
                 log::warn!("[NDI] Source lost — clearing active input state");
                 let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());

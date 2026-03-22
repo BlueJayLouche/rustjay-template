@@ -22,8 +22,8 @@ glam = { version = "0.29", features = ["bytemuck", "serde"] }
 bytemuck = { version = "1.21", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
-# NDI (Network Device Interface)
-grafton-ndi = "0.11"
+# NDI (Network Device Interface) — optional; enable with --features ndi
+grafton-ndi = { version = "0.11", optional = true }
 
 # Threading
 crossbeam = "0.8"
@@ -108,8 +108,9 @@ codegen-units = 1
 panic = "abort"
 
 [features]
-default = ["webcam"]
+default = ["webcam", "ndi"]
 webcam = ["nokhwa"]
+ndi = ["grafton-ndi"]
 spout = []   # Windows Spout support (dep is in [target.windows.dependencies])
 v4l2 = []    # Linux V4L2 loopback output — fill in dep when implementing
 

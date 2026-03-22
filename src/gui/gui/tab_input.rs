@@ -62,25 +62,28 @@ impl ControlGui {
             ui.text_disabled("No webcams found");
         }
 
-        ui.spacing();
-        ui.separator();
-        ui.spacing();
-
         // NDI section
-        ui.text_colored([0.0, 1.0, 1.0, 1.0], "NDI");
-        if !self.ndi_sources.is_empty() {
-            let source_names: Vec<&str> = self.ndi_sources.iter().map(|s| s.as_str()).collect();
-            ui.combo_simple_string("Select NDI Source", &mut self.selected_ndi, &source_names);
+        #[cfg(feature = "ndi")]
+        {
+            ui.spacing();
+            ui.separator();
+            ui.spacing();
 
-            if ui.button("Start NDI") {
-                let source_name = self.ndi_sources.get(self.selected_ndi as usize)
-                    .cloned()
-                    .unwrap_or_default();
-                let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                state.input_command = InputCommand::StartNdi { source_name };
+            ui.text_colored([0.0, 1.0, 1.0, 1.0], "NDI");
+            if !self.ndi_sources.is_empty() {
+                let source_names: Vec<&str> = self.ndi_sources.iter().map(|s| s.as_str()).collect();
+                ui.combo_simple_string("Select NDI Source", &mut self.selected_ndi, &source_names);
+
+                if ui.button("Start NDI") {
+                    let source_name = self.ndi_sources.get(self.selected_ndi as usize)
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.input_command = InputCommand::StartNdi { source_name };
+                }
+            } else {
+                ui.text_disabled("No NDI sources found");
             }
-        } else {
-            ui.text_disabled("No NDI sources found");
         }
 
         // Syphon section (macOS only)

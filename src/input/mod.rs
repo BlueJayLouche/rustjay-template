@@ -20,6 +20,7 @@ pub enum InputCommand {
         height: u32,
         fps: u32,
     },
+    #[cfg(feature = "ndi")]
     StartNdi {
         source_name: String,
     },
@@ -40,8 +41,23 @@ pub enum InputCommand {
     RefreshDevices,
 }
 
+#[cfg(feature = "ndi")]
 pub mod ndi;
+#[cfg(feature = "ndi")]
 pub use ndi::{list_ndi_sources, NdiReceiver, NdiFrame};
+
+#[cfg(not(feature = "ndi"))]
+pub struct NdiReceiver;
+#[cfg(not(feature = "ndi"))]
+pub struct NdiFrame {
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+#[cfg(not(feature = "ndi"))]
+pub fn list_ndi_sources(_timeout_ms: u64) -> Vec<String> {
+    vec![]
+}
 
 #[cfg(feature = "webcam")]
 pub mod webcam;
@@ -91,6 +107,7 @@ pub struct InputFrame {
 /// Results returned from the background discovery thread
 struct DiscoveryResults {
     webcam: Vec<String>,
+    #[cfg(feature = "ndi")]
     ndi: Vec<String>,
     #[cfg(target_os = "macos")]
     syphon: Vec<SyphonServerInfo>,
@@ -115,6 +132,7 @@ pub struct InputManager {
     #[cfg(not(feature = "webcam"))]
     webcam: Option<()>,
     frame_receiver: Option<mpsc::Receiver<WebcamFrame>>,
+    #[cfg(feature = "ndi")]
     ndi_receiver: Option<NdiReceiver>,
 
     // Syphon (macOS only)
@@ -134,6 +152,7 @@ pub struct InputManager {
 
     // Device lists — None = not yet discovered, Some([]) = discovered but none found
     webcam_devices: Option<Vec<String>>,
+    #[cfg(feature = "ndi")]
     ndi_sources: Option<Vec<String>>,
     #[cfg(target_os = "macos")]
     syphon_servers: Option<Vec<SyphonServerInfo>>,
@@ -158,6 +177,7 @@ impl InputManager {
             #[cfg(not(feature = "webcam"))]
             webcam: None,
             frame_receiver: None,
+            #[cfg(feature = "ndi")]
             ndi_receiver: None,
             #[cfg(target_os = "macos")]
             syphon_receiver: None,
@@ -169,6 +189,7 @@ impl InputManager {
             spout_receiver: None,
             current_frame: None,
             webcam_devices: None,
+            #[cfg(feature = "ndi")]
             ndi_sources: None,
             #[cfg(target_os = "macos")]
             syphon_servers: None,
@@ -194,8 +215,14 @@ impl InputManager {
     }
 
     /// Get cached list of NDI sources (empty until discovery completes)
+    #[cfg(feature = "ndi")]
     pub fn ndi_sources(&self) -> &[String] {
         self.ndi_sources.as_deref().unwrap_or(&[])
+    }
+
+    #[cfg(not(feature = "ndi"))]
+    pub fn ndi_sources(&self) -> &[String] {
+        &[]
     }
 
     /// Get cached list of Syphon servers (macOS only; empty until discovery completes)
@@ -225,7 +252,10 @@ impl InputManager {
         }
 
         self.webcam_devices = None;
-        self.ndi_sources = None;
+        #[cfg(feature = "ndi")]
+        {
+            self.ndi_sources = None;
+        }
         #[cfg(target_os = "macos")]
         {
             self.syphon_servers = None;
@@ -253,9 +283,15 @@ impl InputManager {
             #[cfg(not(feature = "webcam"))]
             let webcam: Vec<String> = Vec::new();
 
-            log::info!("[InputManager] Discovering NDI sources...");
-            let ndi = list_ndi_sources(2000);
-            log::info!("[InputManager] Found {} NDI source(s)", ndi.len());
+            #[cfg(feature = "ndi")]
+            let ndi = {
+                log::info!("[InputManager] Discovering NDI sources...");
+                let sources = list_ndi_sources(2000);
+                log::info!("[InputManager] Found {} NDI source(s)", sources.len());
+                sources
+            };
+            #[cfg(not(feature = "ndi"))]
+            let ndi: Vec<String> = Vec::new();
 
             #[cfg(target_os = "macos")]
             let syphon = {
@@ -276,6 +312,7 @@ impl InputManager {
 
             let _ = tx.send(DiscoveryResults {
                 webcam,
+                #[cfg(feature = "ndi")]
                 ndi,
                 #[cfg(target_os = "macos")]
                 syphon,
@@ -296,7 +333,10 @@ impl InputManager {
         let result = self.discovery_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(result) = result {
             self.webcam_devices = Some(result.webcam);
-            self.ndi_sources = Some(result.ndi);
+            #[cfg(feature = "ndi")]
+            {
+                self.ndi_sources = Some(result.ndi);
+            }
             #[cfg(target_os = "macos")]
             {
                 self.syphon_servers = Some(result.syphon);
@@ -338,6 +378,7 @@ impl InputManager {
     }
 
     /// Start NDI input
+    #[cfg(feature = "ndi")]
     pub fn start_ndi(&mut self, source_name: impl Into<String>) -> Result<()> {
         self.stop();
 
@@ -351,6 +392,11 @@ impl InputManager {
 
         log::info!("Started NDI input: {}", source_name);
         Ok(())
+    }
+
+    #[cfg(not(feature = "ndi"))]
+    pub fn start_ndi(&mut self, _source_name: impl Into<String>) -> Result<()> {
+        Err(anyhow::anyhow!("NDI support not compiled. Enable the 'ndi' feature."))
     }
 
     /// Start Syphon input (macOS only)
@@ -435,6 +481,7 @@ impl InputManager {
         }
 
         // Stop NDI
+        #[cfg(feature = "ndi")]
         if let Some(mut ndi) = self.ndi_receiver.take() {
             ndi.stop();
         }
@@ -476,6 +523,7 @@ impl InputManager {
         }
 
         // Handle NDI frames
+        #[cfg(feature = "ndi")]
         if let Some(ref mut ndi) = self.ndi_receiver {
             if let Some(frame) = ndi.get_latest_frame() {
                 self.resolution = (frame.width, frame.height);
@@ -551,8 +599,14 @@ impl InputManager {
     }
 
     /// Returns true if the NDI source was lost (not found or too many errors)
+    #[cfg(feature = "ndi")]
     pub fn is_ndi_source_lost(&self) -> bool {
         self.ndi_receiver.as_ref().map(|r| r.is_source_lost()).unwrap_or(false)
+    }
+
+    #[cfg(not(feature = "ndi"))]
+    pub fn is_ndi_source_lost(&self) -> bool {
+        false
     }
 }
 

@@ -15,6 +15,7 @@ pub struct ControlGui {
 
     // Device lists
     webcam_devices: Vec<String>,
+    #[cfg(feature = "ndi")]
     ndi_sources: Vec<String>,
     #[cfg(target_os = "macos")]
     syphon_servers: Vec<crate::input::SyphonServerInfo>,
@@ -22,12 +23,14 @@ pub struct ControlGui {
 
     // Selection state
     selected_webcam: usize,
+    #[cfg(feature = "ndi")]
     selected_ndi: usize,
     #[cfg(target_os = "macos")]
     selected_syphon: usize,
     selected_audio_device: usize,
 
     // NDI output name
+    #[cfg(feature = "ndi")]
     ndi_output_name: String,
 
     // Syphon output name (macOS)
@@ -66,7 +69,11 @@ impl ControlGui {
             let syphon = state.syphon_output.server_name.clone();
             #[cfg(not(target_os = "macos"))]
             let syphon = String::new();
-            (state.ndi_output.stream_name.clone(), syphon)
+            #[cfg(feature = "ndi")]
+            let ndi = state.ndi_output.stream_name.clone();
+            #[cfg(not(feature = "ndi"))]
+            let ndi = String::new();
+            (ndi, syphon)
         };
 
         // Initialize pending resolutions from current state
@@ -83,15 +90,18 @@ impl ControlGui {
         Ok(Self {
             shared_state,
             webcam_devices: Vec::new(),
+            #[cfg(feature = "ndi")]
             ndi_sources: Vec::new(),
             #[cfg(target_os = "macos")]
             syphon_servers: Vec::new(),
             audio_devices: Vec::new(),
             selected_webcam: 0,
+            #[cfg(feature = "ndi")]
             selected_ndi: 0,
             #[cfg(target_os = "macos")]
             selected_syphon: 0,
             selected_audio_device: 0,
+            #[cfg(feature = "ndi")]
             ndi_output_name: ndi_name,
             #[cfg(target_os = "macos")]
             syphon_output_name: syphon_name,
@@ -134,7 +144,10 @@ impl ControlGui {
     /// returns `true` (i.e. background discovery has finished).
     pub fn update_device_lists(&mut self, input_manager: &InputManager) {
         self.webcam_devices = input_manager.webcam_devices().to_vec();
-        self.ndi_sources = input_manager.ndi_sources().to_vec();
+        #[cfg(feature = "ndi")]
+        {
+            self.ndi_sources = input_manager.ndi_sources().to_vec();
+        }
         #[cfg(target_os = "macos")]
         {
             self.syphon_servers = input_manager.syphon_servers().to_vec();
