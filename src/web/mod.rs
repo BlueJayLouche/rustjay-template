@@ -55,6 +55,7 @@ pub struct WebParameter {
     pub max: f32,
     pub value: f32,
     pub step: f32,
+    pub options: Option<Vec<String>>,
 }
 
 /// Web server state shared between handlers
@@ -129,10 +130,27 @@ impl WebServer {
                 max,
                 value,
                 step,
+                options: None,
             });
         }
     }
-    
+
+    /// Register an enum parameter for the web UI (rendered as a select/dropdown)
+    pub fn register_enum_parameter(&mut self, id: &str, name: &str, category: &str, options: Vec<String>, value: f32) {
+        if let Ok(mut state) = self.state.lock() {
+            state.parameters.insert(id.to_string(), WebParameter {
+                id: id.to_string(),
+                name: name.to_string(),
+                category: category.to_string(),
+                min: 0.0,
+                max: (options.len() as f32) - 1.0,
+                value,
+                step: 1.0,
+                options: Some(options),
+            });
+        }
+    }
+
     /// Register default parameters (color, audio, etc.)
     pub fn register_default_parameters(&mut self) {
         // Color parameters
