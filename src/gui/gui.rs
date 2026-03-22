@@ -58,6 +58,10 @@ pub struct ControlGui {
     pending_internal_height: u32,
     pending_output_width: u32,
     pending_output_height: u32,
+
+    // Preset save inline form
+    preset_name_buffer: String,
+    saving_preset: bool,
 }
 
 impl ControlGui {
@@ -119,6 +123,8 @@ impl ControlGui {
             pending_internal_height: internal_h,
             pending_output_width: output_w,
             pending_output_height: output_h,
+            preset_name_buffer: String::new(),
+            saving_preset: false,
         })
     }
 
@@ -325,6 +331,7 @@ mod tab_input;
 mod tab_color;
 mod tab_audio;
 mod tab_output;
+mod tab_presets;
 mod tab_settings;
 mod tab_control;
 mod tab_lfo;

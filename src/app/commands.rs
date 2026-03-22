@@ -370,6 +370,13 @@ impl App {
                     }
                 }
             }
+            PresetCommand::AssignSlot { preset_index, slot } => {
+                if let Some(ref mut bank) = self.preset_bank {
+                    if let Err(e) = bank.assign_to_slot(preset_index, slot) {
+                        log::error!("Failed to assign slot: {}", e);
+                    }
+                }
+            }
             PresetCommand::Refresh => {
                 if let Some(ref mut bank) = self.preset_bank {
                     if let Err(e) = bank.refresh() {
@@ -378,6 +385,20 @@ impl App {
                 }
             }
             _ => {}
+        }
+
+        self.sync_preset_names_to_state();
+    }
+
+    fn sync_preset_names_to_state(&mut self) {
+        if let Some(ref bank) = self.preset_bank {
+            let names: Vec<String> = bank.presets.iter().map(|p| p.name.clone()).collect();
+            let slot_names: [Option<String>; 8] = std::array::from_fn(|i| {
+                bank.get_slot_name(i + 1).map(|s| s.to_string())
+            });
+            let mut state = lock(&self.shared_state);
+            state.preset_names = names;
+            state.preset_quick_slot_names = slot_names;
         }
     }
 

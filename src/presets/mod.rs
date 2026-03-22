@@ -13,6 +13,7 @@ pub enum PresetCommand {
     Load(usize),
     Delete(usize),
     ApplySlot(usize),
+    AssignSlot { preset_index: usize, slot: usize },
     Refresh,
 }
 use std::collections::HashMap;

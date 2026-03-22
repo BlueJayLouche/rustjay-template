@@ -128,11 +128,21 @@ impl App {
             Some(server)
         };
 
-        // Initialize preset bank
+        // Initialize preset bank and sync names to shared state
         let preset_bank = match default_presets_dir() {
             Ok(presets_dir) => {
                 log::info!("Preset bank initialized");
-                Some(PresetBank::new(presets_dir))
+                let bank = PresetBank::new(presets_dir);
+                {
+                    let names: Vec<String> = bank.presets.iter().map(|p| p.name.clone()).collect();
+                    let slot_names: [Option<String>; 8] = std::array::from_fn(|i| {
+                        bank.get_slot_name(i + 1).map(|s| s.to_string())
+                    });
+                    let mut state = shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.preset_names = names;
+                    state.preset_quick_slot_names = slot_names;
+                }
+                Some(bank)
             }
             Err(e) => {
                 log::warn!("Failed to initialize preset bank: {}", e);
