@@ -4,6 +4,10 @@
 
 use crate::core::{HsbParams, ResolutionState, SharedState};
 use serde::{Deserialize, Serialize};
+
+fn default_fft_size() -> usize {
+    crate::audio::fft::DEFAULT_FFT_SIZE
+}
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -64,6 +68,8 @@ pub struct AppSettings {
     pub audio_smoothing: f32,
     pub audio_normalize: bool,
     pub audio_pink_noise: bool,
+    #[serde(default = "default_fft_size")]
+    pub audio_fft_size: usize,
     pub audio_device: Option<String>,
     
     /// NDI output settings
@@ -103,6 +109,7 @@ impl Default for AppSettings {
             audio_smoothing: 0.5,
             audio_normalize: true,
             audio_pink_noise: false,
+            audio_fft_size: crate::audio::fft::DEFAULT_FFT_SIZE,
             audio_device: None,
             #[cfg(feature = "ndi")]
             ndi_stream_name: "RustJay Output".to_string(),
@@ -193,6 +200,7 @@ impl AppSettings {
         state.audio.smoothing = self.audio_smoothing;
         state.audio.normalize = self.audio_normalize;
         state.audio.pink_noise_shaping = self.audio_pink_noise;
+        state.audio.fft_size = self.audio_fft_size;
         state.audio.selected_device = self.audio_device.clone();
         #[cfg(feature = "ndi")]
         {
@@ -221,6 +229,7 @@ impl AppSettings {
             audio_smoothing: state.audio.smoothing,
             audio_normalize: state.audio.normalize,
             audio_pink_noise: state.audio.pink_noise_shaping,
+            audio_fft_size: state.audio.fft_size,
             audio_device: state.audio.selected_device.clone(),
             #[cfg(feature = "ndi")]
             ndi_stream_name: state.ndi_output.stream_name.clone(),

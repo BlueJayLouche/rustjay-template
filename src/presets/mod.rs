@@ -5,6 +5,10 @@
 use crate::core::{HsbParams, SharedState};
 use serde::{Deserialize, Serialize};
 
+fn default_fft_size() -> usize {
+    crate::audio::fft::DEFAULT_FFT_SIZE
+}
+
 /// Commands for preset management
 #[derive(Debug, Clone, PartialEq)]
 pub enum PresetCommand {
@@ -39,7 +43,9 @@ pub struct Preset {
     pub audio_smoothing: f32,
     pub audio_normalize: bool,
     pub audio_pink_noise: bool,
-    
+    #[serde(default = "default_fft_size")]
+    pub audio_fft_size: usize,
+
     // Resolution
     pub internal_width: u32,
     pub internal_height: u32,
@@ -65,6 +71,7 @@ impl Preset {
             audio_smoothing: state.audio.smoothing,
             audio_normalize: state.audio.normalize,
             audio_pink_noise: state.audio.pink_noise_shaping,
+            audio_fft_size: state.audio.fft_size,
             internal_width: state.resolution.internal_width,
             internal_height: state.resolution.internal_height,
             custom_values: HashMap::new(),
@@ -79,6 +86,7 @@ impl Preset {
         state.audio.smoothing = self.audio_smoothing;
         state.audio.normalize = self.audio_normalize;
         state.audio.pink_noise_shaping = self.audio_pink_noise;
+        state.audio.fft_size = self.audio_fft_size;
         state.resolution.internal_width = self.internal_width;
         state.resolution.internal_height = self.internal_height;
     }

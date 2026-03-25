@@ -74,9 +74,9 @@ impl ControlGui {
 
         if enabled {
             // Get additional audio settings
-            let (mut normalize, mut pink_noise) = {
+            let (mut normalize, mut pink_noise, current_fft_size) = {
                 let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                (state.audio.normalize, state.audio.pink_noise_shaping)
+                (state.audio.normalize, state.audio.pink_noise_shaping, state.audio.fft_size)
             };
 
             // Amplitude
@@ -97,6 +97,27 @@ impl ControlGui {
             ui.separator();
             ui.spacing();
 
+            // FFT Size dropdown
+            {
+                use crate::audio::fft::{FFT_SIZES, FFT_SIZE_LABELS};
+                let mut selected_idx = FFT_SIZES.iter().position(|&s| s == current_fft_size).unwrap_or(2);
+                let labels: Vec<&str> = FFT_SIZE_LABELS.iter().copied().collect();
+                ui.text("FFT Size");
+                if ui.combo_simple_string("FFT Size##combo", &mut selected_idx, &labels) {
+                    if let Some(&new_size) = FFT_SIZES.get(selected_idx) {
+                        if new_size != current_fft_size {
+                            let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.audio.fft_size = new_size;
+                            state.audio_command = AudioCommand::SetFftSize(new_size);
+                        }
+                    }
+                }
+            }
+
+            ui.spacing();
+            ui.separator();
+            ui.spacing();
+
             // Processing options
             ui.text("Processing Options");
 
@@ -105,7 +126,7 @@ impl ControlGui {
                 state.audio.normalize = normalize;
             }
             ui.same_line();
-            ui.text_disabled("(Scales all bands to max)");
+            ui.text_disabled("(Auto-gain across all bands)");
 
             if ui.checkbox("+3dB/Octave Shaping", &mut pink_noise) {
                 let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
@@ -146,7 +167,7 @@ impl ControlGui {
 
             // FFT visualization
             ui.text("Frequency Bands");
-            let band_names = ["Sub", "Bass", "Low", "Mid", "High", "Presence", "Brilliance", "Air"];
+            let band_names = ["Sub Bass", "Bass", "Low Mid", "Mid", "High Mid", "High", "Very High", "Presence"];
             for (i, (&value, name)) in fft.iter().zip(band_names.iter()).enumerate() {
                 let width = 200.0 * value;
                 ui.text(format!("{}", name));

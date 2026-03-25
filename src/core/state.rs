@@ -124,6 +124,8 @@ pub struct AudioState {
     pub normalize: bool,
     /// Apply +3dB per octave pink noise compensation
     pub pink_noise_shaping: bool,
+    /// Current FFT size (requires stream rebuild to change)
+    pub fft_size: usize,
     /// Tap tempo times (for BPM calculation)
     pub tap_times: Vec<f64>,
     /// Last tap time (for timeout detection)
@@ -147,6 +149,7 @@ impl Default for AudioState {
             available_devices: Vec::new(),
             normalize: true,
             pink_noise_shaping: false,
+            fft_size: crate::audio::fft::DEFAULT_FFT_SIZE,
             tap_times: Vec::new(),
             last_tap_time: 0.0,
             tap_tempo_info: "Tap to set tempo".to_string(),

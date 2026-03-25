@@ -81,8 +81,12 @@ impl App {
                 log::warn!("[Audio] Stream error detected — attempting reconnect (device: {:?})", device);
                 drop(analyzer); // release immutable borrow before we need mutable
                 if let Some(ref mut analyzer) = self.audio_analyzer {
-                    if let Err(e) = analyzer.start_with_device(device.as_deref()) {
-                        log::error!("[Audio] Reconnect failed: {}", e);
+                    match analyzer.start_with_device(device.as_deref()) {
+                        Ok(actual_name) => {
+                            let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.audio.selected_device = Some(actual_name);
+                        }
+                        Err(e) => log::error!("[Audio] Reconnect failed: {}", e),
                     }
                 }
             }

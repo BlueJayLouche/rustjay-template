@@ -94,12 +94,19 @@ impl App {
             log::info!("Applied saved settings to state");
         }
 
-        // Initialize audio analyzer
+        // Initialize audio analyzer with persisted settings
         let mut analyzer = AudioAnalyzer::new();
-        if let Err(e) = analyzer.start() {
-            log::warn!("Failed to start audio analyzer: {}", e);
-        } else {
-            log::info!("Audio analyzer started");
+        let (saved_fft_size, saved_device) = {
+            let state = shared_state.lock().unwrap_or_else(|e| e.into_inner());
+            (state.audio.fft_size, state.audio.selected_device.clone())
+        };
+        analyzer.set_fft_size(saved_fft_size);
+        match analyzer.start_with_device(saved_device.as_deref()) {
+            Ok(actual_name) => {
+                let mut state = shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                state.audio.selected_device = Some(actual_name);
+            }
+            Err(e) => log::warn!("Failed to start audio analyzer: {}", e),
         }
 
         // Initialize MIDI manager

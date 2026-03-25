@@ -216,23 +216,24 @@ impl App {
             }
             AudioCommand::SelectDevice(device_name) => {
                 log::info!("[Audio] Selecting device: {}", device_name);
-                lock(&self.shared_state).audio.selected_device = Some(device_name.clone());
                 if let Some(ref mut analyzer) = self.audio_analyzer {
                     analyzer.stop();
-                    if let Err(e) = analyzer.start_with_device(Some(&device_name)) {
-                        log::error!("Failed to start audio with device '{}': {}", device_name, e);
-                    } else {
-                        log::info!("[Audio] Started with device: {}", device_name);
+                    match analyzer.start_with_device(Some(&device_name)) {
+                        Ok(actual_name) => {
+                            lock(&self.shared_state).audio.selected_device = Some(actual_name);
+                        }
+                        Err(e) => log::error!("Failed to start audio with device '{}': {}", device_name, e),
                     }
                 }
             }
             AudioCommand::Start => {
                 if let Some(ref mut analyzer) = self.audio_analyzer {
                     let device = lock(&self.shared_state).audio.selected_device.clone();
-                    if let Err(e) = analyzer.start_with_device(device.as_deref()) {
-                        log::error!("Failed to start audio: {}", e);
-                    } else {
-                        log::info!("[Audio] Analysis started");
+                    match analyzer.start_with_device(device.as_deref()) {
+                        Ok(actual_name) => {
+                            lock(&self.shared_state).audio.selected_device = Some(actual_name);
+                        }
+                        Err(e) => log::error!("Failed to start audio: {}", e),
                     }
                 }
             }
@@ -240,6 +241,18 @@ impl App {
                 if let Some(ref mut analyzer) = self.audio_analyzer {
                     analyzer.stop();
                     log::info!("[Audio] Analysis stopped");
+                }
+            }
+            AudioCommand::SetFftSize(size) => {
+                if let Some(ref mut analyzer) = self.audio_analyzer {
+                    analyzer.set_fft_size(size);
+                    let device = lock(&self.shared_state).audio.selected_device.clone();
+                    match analyzer.start_with_device(device.as_deref()) {
+                        Ok(actual_name) => {
+                            lock(&self.shared_state).audio.selected_device = Some(actual_name);
+                        }
+                        Err(e) => log::error!("Failed to restart audio with FFT size {}: {}", size, e),
+                    }
                 }
             }
             _ => {}

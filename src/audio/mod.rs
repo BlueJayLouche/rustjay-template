@@ -9,7 +9,7 @@ pub mod routing;
 pub use device::{default_audio_device, list_audio_devices};
 
 use crate::audio::device::{build_stream_f32, build_stream_i16, build_stream_u16};
-use crate::audio::fft::{AudioConfig, AudioOutput};
+use crate::audio::fft::{AudioConfig, AudioOutput, DEFAULT_FFT_SIZE};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +23,7 @@ pub enum AudioCommand {
     SelectDevice(String),
     Start,
     Stop,
+    SetFftSize(usize),
 }
 
 /// Audio analyzer running in real-time
@@ -35,6 +36,8 @@ pub struct AudioAnalyzer {
     output: Arc<AudioOutput>,
     /// Lock-free: written by main thread, read by audio callback
     config: Arc<AudioConfig>,
+    /// Current FFT size (requires stream rebuild to change)
+    fft_size: usize,
 }
 
 impl AudioAnalyzer {
@@ -45,6 +48,7 @@ impl AudioAnalyzer {
             stream_error: Arc::new(AtomicBool::new(false)),
             output: Arc::new(AudioOutput::new()),
             config: Arc::new(AudioConfig::new()),
+            fft_size: DEFAULT_FFT_SIZE,
         }
     }
 
@@ -54,19 +58,37 @@ impl AudioAnalyzer {
         self.stream_error.swap(false, Ordering::Relaxed)
     }
 
+    pub fn fft_size(&self) -> usize {
+        self.fft_size
+    }
+
+    pub fn set_fft_size(&mut self, size: usize) {
+        self.fft_size = size;
+    }
+
     /// Start audio analysis with default device
-    pub fn start(&mut self) -> anyhow::Result<()> {
+    pub fn start(&mut self) -> anyhow::Result<String> {
         self.start_with_device(None)
     }
 
-    /// Start audio analysis with specific device (None for default)
-    pub fn start_with_device(&mut self, device_name: Option<&str>) -> anyhow::Result<()> {
-        log::info!("[Audio] start_with_device called with: {:?}", device_name);
+    /// Start audio analysis with specific device (None for default).
+    /// Returns the actual device name used.
+    pub fn start_with_device(&mut self, device_name: Option<&str>) -> anyhow::Result<String> {
+        log::info!("[Audio] start_with_device called with: {:?}, fft_size: {}", device_name, self.fft_size);
 
+        // Signal old callback to stop, then drop the old stream.
+        // Old callback still holds its own Arc clones — let them become orphans
+        // so any in-flight callbacks write to Arcs nobody reads.
         if self.stream.is_some() {
             log::info!("[Audio] Stopping existing stream first");
-            self.stop();
+            self.running.store(false, Ordering::Release);
+            self.stream = None;
         }
+
+        // Fresh Arcs for the new stream — old callback can't pollute these
+        self.running = Arc::new(AtomicBool::new(false));
+        self.output = Arc::new(AudioOutput::new());
+        self.stream_error = Arc::new(AtomicBool::new(false));
 
         let host = cpal::default_host();
 
@@ -105,28 +127,29 @@ impl AudioAnalyzer {
             }
         };
 
-        log::info!("[Audio] Selected device: {:?}", device.name()?);
-        self.output.reset();
+        let actual_device_name = device.name()?;
+        log::info!("[Audio] Selected device: {:?}", actual_device_name);
 
         let config = device.default_input_config()?;
         log::info!("Audio config: {:?}", config);
 
         let sample_rate = config.sample_rate().0 as f32;
         let channels = config.channels() as usize;
+        let fft_size = self.fft_size;
 
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => build_stream_f32(
-                &device, &config.into(), sample_rate, channels,
+                &device, &config.into(), sample_rate, channels, fft_size,
                 Arc::clone(&self.running), Arc::clone(&self.output),
                 Arc::clone(&self.config), Arc::clone(&self.stream_error),
             )?,
             cpal::SampleFormat::I16 => build_stream_i16(
-                &device, &config.into(), sample_rate, channels,
+                &device, &config.into(), sample_rate, channels, fft_size,
                 Arc::clone(&self.running), Arc::clone(&self.output),
                 Arc::clone(&self.config), Arc::clone(&self.stream_error),
             )?,
             cpal::SampleFormat::U16 => build_stream_u16(
-                &device, &config.into(), sample_rate, channels,
+                &device, &config.into(), sample_rate, channels, fft_size,
                 Arc::clone(&self.running), Arc::clone(&self.output),
                 Arc::clone(&self.config), Arc::clone(&self.stream_error),
             )?,
@@ -137,8 +160,8 @@ impl AudioAnalyzer {
         self.stream = Some(stream);
         self.running.store(true, Ordering::Release);
 
-        log::info!("Audio analyzer started");
-        Ok(())
+        log::info!("Audio analyzer started (FFT size: {}, device: {})", fft_size, actual_device_name);
+        Ok(actual_device_name)
     }
 
     /// Stop audio analysis
