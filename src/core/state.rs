@@ -346,7 +346,7 @@ impl SharedState {
 
             #[cfg(feature = "ndi")]
             ndi_output: NdiOutputState {
-                stream_name: "RustJay Output".to_string(),
+                stream_name: "RustJay Template".to_string(),
                 is_active: false,
                 include_alpha: false,
             },
@@ -354,7 +354,7 @@ impl SharedState {
 
             #[cfg(target_os = "macos")]
             syphon_output: SyphonOutputState {
-                server_name: "RustJay".to_string(),
+                server_name: "RustJay Template".to_string(),
                 enabled: false,
             },
 

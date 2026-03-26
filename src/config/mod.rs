@@ -42,7 +42,7 @@ impl Default for OscConfig {
         Self {
             port: 9000,
             enabled: false,
-            base_address: "/rustjay".to_string(),
+            base_address: "/rustjay-template".to_string(),
         }
     }
 }
@@ -112,11 +112,11 @@ impl Default for AppSettings {
             audio_fft_size: crate::audio::fft::DEFAULT_FFT_SIZE,
             audio_device: None,
             #[cfg(feature = "ndi")]
-            ndi_stream_name: "RustJay Output".to_string(),
+            ndi_stream_name: "RustJay Template".to_string(),
             #[cfg(feature = "ndi")]
             ndi_include_alpha: false,
             #[cfg(target_os = "macos")]
-            syphon_server_name: "RustJay".to_string(),
+            syphon_server_name: "RustJay Template".to_string(),
             midi_enabled: false,
             midi_device: None,
             midi_mappings: Vec::new(),
