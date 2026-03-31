@@ -10,8 +10,8 @@
 //! 1. Create a standalone D3D11 device (wgpu on Windows uses D3D12, so we
 //!    maintain a separate D3D11 device solely for Spout sharing).
 //! 2. Create a D3D11 shared texture with `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`.
-//! 3. Register the sender in two Windows named shared-memory mappings that
-//!    Spout uses as its sender registry (`SpoutSenderNames` + per-sender info).
+//! 3. Register the sender in the two Spout2 shared-memory mappings:
+//!    `SpoutSenderNames` (flat name array) + per-sender `SharedTextureInfo`.
 //! 4. Each frame: read back the wgpu render target to CPU bytes, then
 //!    `UpdateSubresource` into the D3D11 shared texture under the keyed mutex.
 //!
@@ -20,6 +20,7 @@
 
 #![cfg(target_os = "windows")]
 
+use crate::engine::texture_utils::dxgi_format;
 use std::sync::Arc;
 
 use windows::core::Interface;
@@ -36,25 +37,37 @@ use windows::Win32::System::Memory::{
     CreateFileMappingA, FILE_MAP_ALL_ACCESS, MapViewOfFile, PAGE_READWRITE, UnmapViewOfFile,
 };
 
-/// SpoutSenderInfo as stored in per-sender named shared memory.
+// ---------------------------------------------------------------------------
+// Spout2 shared-memory layout constants
+// ---------------------------------------------------------------------------
+
+/// Max bytes per sender name (including null terminator).
+const SPOUT_MAX_NAME_LEN: usize = 256;
+
+/// Default max senders.
+const SPOUT_MAX_SENDERS: usize = 64;
+
+/// Per-sender info struct — matches Spout2 SDK `SharedTextureInfo`.
 ///
-/// Layout matches Spout2 SDK `SpoutSenderNames.h` on x64 Windows:
-/// - offset  0: width  (u32)
-/// - offset  4: height (u32)
-/// - offset  8: dwFormat (u32) — DXGI_FORMAT_B8G8R8A8_UNORM = 87
-/// - offset 12: padding (u32) to align HANDLE to 8 bytes
-/// - offset 16: shareHandle (usize / HANDLE)
-/// - offset 24: NameCount (u32)
-/// - offset 28: padding (u32) for 32-byte struct size
+/// ```text
+/// offset  0: shareHandle  (u32)  — DXGI handle via HandleToLong()
+/// offset  4: width        (u32)
+/// offset  8: height       (u32)
+/// offset 12: format       (u32)  — DXGI_FORMAT enum value
+/// offset 16: usage        (u32)  — adapter index / usage
+/// offset 20: description  [u8; 256] — sender description / exe path
+/// offset 276: partnerId   (u32)
+/// total: 280 bytes
+/// ```
 #[repr(C)]
-struct SpoutSenderInfo {
+struct SharedTextureInfo {
+    share_handle: u32,
     width: u32,
     height: u32,
-    dw_format: u32,
-    _pad: u32,
-    share_handle: usize,
-    name_count: u32,
-    _pad2: u32,
+    format: u32,
+    usage: u32,
+    description: [u8; 256],
+    partner_id: u32,
 }
 
 /// Spout sender — shares the wgpu render target with other apps on this machine.
@@ -66,6 +79,10 @@ pub struct SpoutOutput {
     share_handle: HANDLE,
     width: u32,
     height: u32,
+    /// Held open to keep the SpoutSenderNames mapping alive
+    _sender_names_map: HANDLE,
+    /// Held open to keep the per-sender SharedTextureInfo mapping alive
+    _sender_info_map: HANDLE,
 }
 
 impl SpoutOutput {
@@ -101,7 +118,7 @@ impl SpoutOutput {
 
             log::info!("[Spout] D3D11 device created for sender '{}'", name);
 
-            Ok(Self {
+            let mut output = Self {
                 sender_name: name.to_string(),
                 d3d_device,
                 d3d_context,
@@ -109,7 +126,17 @@ impl SpoutOutput {
                 share_handle: HANDLE::default(),
                 width: 0,
                 height: 0,
-            })
+                _sender_names_map: HANDLE::default(),
+                _sender_info_map: HANDLE::default(),
+            };
+
+            // Early registration: create a small placeholder texture to register
+            // the sender name immediately. This eliminates the race condition where
+            // receivers don't see the sender until the first frame.
+            output.create_shared_texture(64, 64)?;
+            log::info!("[Spout] Sender '{}' registered early (placeholder 64x64)", name);
+
+            Ok(output)
         }
     }
 
@@ -125,6 +152,8 @@ impl SpoutOutput {
 
         // (Re-)create the shared D3D11 texture when dimensions change
         if self.shared_texture.is_none() || self.width != width || self.height != height {
+            log::debug!("[Spout] Resizing shared texture from {}x{} to {}x{}",
+                self.width, self.height, width, height);
             self.shared_texture = None;
             self.create_shared_texture(width, height)?;
         }
@@ -137,22 +166,25 @@ impl SpoutOutput {
             let d3d_tex = self.shared_texture.as_ref().unwrap();
             let keyed_mutex: IDXGIKeyedMutex = d3d_tex.cast()?;
 
-            // Acquire mutex with sender key (0), 16 ms timeout (~1 frame at 60 Hz)
-            keyed_mutex.AcquireSync(0, 16)?;
+            // Acquire mutex with sender key (0), INFINITE timeout to match Spout2 SDK.
+            keyed_mutex.AcquireSync(0, 0xFFFFFFFF)?;
 
+            // Note: bytes buffer from readback is already 256-byte aligned
+            let row_pitch = crate::engine::texture_utils::aligned_row_pitch_bgra(width);
             self.d3d_context.UpdateSubresource(
                 d3d_tex,
                 0,    // subresource
                 None, // full extent
                 bytes.as_ptr() as *const _,
-                width * 4, // row pitch (BGRA = 4 bytes/pixel)
-                0,         // depth pitch (not a 3D texture)
+                row_pitch,
+                0,    // depth pitch (not a 3D texture)
             );
 
             // Release with sender key (0) so receiver can acquire with key 0
             keyed_mutex.ReleaseSync(0)?;
         }
 
+        log::trace!("[Spout] Frame submitted to '{}' ({}x{})", self.sender_name, width, height);
         Ok(())
     }
 
@@ -187,6 +219,19 @@ impl SpoutOutput {
             let dxgi_resource: IDXGIResource = tex.cast()?;
             let handle = dxgi_resource.GetSharedHandle()?;
 
+            // Initialize the keyed mutex by acquiring and releasing it once
+            // This ensures the mutex is in a known state for receivers
+            match tex.cast::<IDXGIKeyedMutex>() {
+                Ok(keyed_mutex) => {
+                    keyed_mutex.AcquireSync(0, 0xFFFFFFFF)?;
+                    keyed_mutex.ReleaseSync(0)?;
+                    log::debug!("[Spout] Keyed mutex initialized for texture {}x{}", width, height);
+                }
+                Err(e) => {
+                    log::warn!("[Spout] Failed to cast to keyed mutex: {:?}", e);
+                }
+            }
+
             log::info!(
                 "[Spout] Shared texture {}x{} created, handle={:?}",
                 width,
@@ -194,35 +239,46 @@ impl SpoutOutput {
                 handle
             );
 
+            // Close old handles before replacing (if resizing)
+            if !self._sender_info_map.is_invalid() && !self._sender_info_map.0.is_null() {
+                CloseHandle(self._sender_info_map).ok();
+            }
+
             self.share_handle = handle;
             self.shared_texture = Some(tex);
             self.width = width;
             self.height = height;
 
-            self.register_spout_sender(width, height, handle)?;
+            let (names_map, info_map) = self.register_spout_sender(width, height, handle)?;
+            self._sender_names_map = names_map;
+            self._sender_info_map = info_map;
         }
         Ok(())
     }
 
-    /// Register this sender in the two Spout shared-memory maps that Spout
-    /// uses to discover senders:
-    ///   - `"SpoutSenderNames"` — global list of active sender names
-    ///   - `"<sender_name>"`    — per-sender info (dimensions + share handle)
+    /// Register this sender in the Spout2 shared-memory maps.
+    ///
+    /// `SpoutSenderNames` — flat array of `char[256]` name slots (no header).
+    /// `"<sender_name>"` — per-sender `SharedTextureInfo` (280 bytes).
+    /// Returns `(sender_names_handle, sender_info_handle)` — caller must keep
+    /// these alive so other apps can discover the sender.
     unsafe fn register_spout_sender(
         &self,
         width: u32,
         height: u32,
         handle: HANDLE,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<(HANDLE, HANDLE)> {
         // ── Global sender name list ───────────────────────────────────────────
-        // Layout: DWORD count @ offset 0, then up to 256 × char[256] names.
+        // Layout: flat array of char[256] name slots, no count header.
+        // An empty slot (first byte == 0) marks the end of the list.
         let map_name = windows::core::s!("SpoutSenderNames");
+        let map_size = (SPOUT_MAX_SENDERS * SPOUT_MAX_NAME_LEN) as u32;
         let hmap = CreateFileMappingA(
             INVALID_HANDLE_VALUE,
             None,
             PAGE_READWRITE,
             0,
-            4096,
+            map_size,
             map_name,
         )?;
 
@@ -236,18 +292,17 @@ impl SpoutOutput {
 
         {
             let base = view.Value as *mut u8;
-            let count_ptr = base as *mut u32;
-            let count = *count_ptr;
             let name_bytes = self.sender_name.as_bytes();
             let mut already_present = false;
 
-            // Check whether our name is already in the list
-            for i in 0..count {
-                let slot = base.add(4 + i as usize * 256);
-                let slot_end = slot.add(256);
-                // Find the null terminator
+            // Scan slots to check if our name is already registered
+            for i in 0..SPOUT_MAX_SENDERS {
+                let slot = base.add(i * SPOUT_MAX_NAME_LEN);
+                if *slot == 0 {
+                    break; // end of list sentinel
+                }
                 let mut len = 0usize;
-                while len < 256 {
+                while len < SPOUT_MAX_NAME_LEN {
                     if *slot.add(len) == 0 {
                         break;
                     }
@@ -259,27 +314,36 @@ impl SpoutOutput {
                     already_present = true;
                     break;
                 }
-                let _ = slot_end; // suppress warning
             }
 
-            if !already_present && (count as usize) < 256 {
-                let slot = base.add(4 + count as usize * 256);
-                let copy_len = name_bytes.len().min(255);
-                std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), slot, copy_len);
-                *slot.add(copy_len) = 0; // null-terminate
-                *count_ptr = count + 1;
-                log::info!(
-                    "[Spout] Registered '{}' in SpoutSenderNames (slot {})",
-                    self.sender_name,
-                    count
-                );
+            if !already_present {
+                // Find the first empty slot
+                for i in 0..SPOUT_MAX_SENDERS {
+                    let slot = base.add(i * SPOUT_MAX_NAME_LEN);
+                    if *slot == 0 {
+                        let copy_len = name_bytes.len().min(SPOUT_MAX_NAME_LEN - 1);
+                        std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), slot, copy_len);
+                        *slot.add(copy_len) = 0; // null-terminate
+                        // Mark the next slot as end-of-list if within bounds
+                        if i + 1 < SPOUT_MAX_SENDERS {
+                            *base.add((i + 1) * SPOUT_MAX_NAME_LEN) = 0;
+                        }
+                        log::info!(
+                            "[Spout] Registered '{}' in SpoutSenderNames (slot {})",
+                            self.sender_name,
+                            i
+                        );
+                        break;
+                    }
+                }
             }
         }
 
         UnmapViewOfFile(view).ok();
-        CloseHandle(hmap).ok();
+        // Do NOT close hmap — keep it alive so the mapping persists.
 
         // ── Per-sender info block ─────────────────────────────────────────────
+        // Map name = sender name, contains SharedTextureInfo (280 bytes).
         let sender_cstr = std::ffi::CString::new(self.sender_name.as_str())
             .map_err(|e| anyhow::anyhow!("[Spout] invalid sender name: {}", e))?;
 
@@ -288,7 +352,7 @@ impl SpoutOutput {
             None,
             PAGE_READWRITE,
             0,
-            std::mem::size_of::<SpoutSenderInfo>() as u32,
+            std::mem::size_of::<SharedTextureInfo>() as u32,
             windows::core::PCSTR(sender_cstr.as_ptr() as *const u8),
         )?;
 
@@ -301,27 +365,40 @@ impl SpoutOutput {
             ));
         }
 
-        let info_ptr = view2.Value as *mut SpoutSenderInfo;
-        *info_ptr = SpoutSenderInfo {
+        // Spout2 stores the HANDLE as 32-bit via HandleToLong() (i32 truncation).
+        let handle_u32 = handle.0 as i32 as u32;
+
+        // Populate description with executable path for better receiver compatibility
+        let mut description = [0u8; 256];
+        if let Ok(exe_path) = std::env::current_exe() {
+            let path_str = exe_path.to_string_lossy();
+            let path_bytes = path_str.as_bytes();
+            let copy_len = path_bytes.len().min(255);
+            description[..copy_len].copy_from_slice(&path_bytes[..copy_len]);
+        }
+
+        let info_ptr = view2.Value as *mut SharedTextureInfo;
+        *info_ptr = SharedTextureInfo {
+            share_handle: handle_u32,
             width,
             height,
-            dw_format: 87, // DXGI_FORMAT_B8G8R8A8_UNORM
-            _pad: 0,
-            share_handle: handle.0 as usize,
-            name_count: 1,
-            _pad2: 0,
+            format: dxgi_format::B8G8R8A8_UNORM,
+            usage: 0,
+            description,
+            partner_id: 0,
         };
 
         UnmapViewOfFile(view2).ok();
-        CloseHandle(hmap2).ok();
+        // Do NOT close hmap2 — keep it alive so receivers can read sender info.
 
         log::info!(
-            "[Spout] Sender info written for '{}' {}x{}",
+            "[Spout] Sender info written for '{}' {}x{} (handle=0x{:08x})",
             self.sender_name,
             width,
-            height
+            height,
+            handle_u32,
         );
-        Ok(())
+        Ok((hmap, hmap2))
     }
 
     /// Remove this sender from the global `SpoutSenderNames` list.
@@ -332,7 +409,7 @@ impl SpoutOutput {
             None,
             PAGE_READWRITE,
             0,
-            4096,
+            (SPOUT_MAX_SENDERS * SPOUT_MAX_NAME_LEN) as u32,
             map_name,
         ) else {
             return;
@@ -341,38 +418,56 @@ impl SpoutOutput {
         let view = MapViewOfFile(hmap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
         if !view.Value.is_null() {
             let base = view.Value as *mut u8;
-            let count_ptr = base as *mut u32;
-            let count = *count_ptr;
             let name_bytes = self.sender_name.as_bytes();
 
-            for i in 0..count {
-                let slot = base.add(4 + i as usize * 256);
+            // Find our name in the flat slot array
+            let mut found_idx: Option<usize> = None;
+            let mut total_count = 0usize;
+            for i in 0..SPOUT_MAX_SENDERS {
+                let slot = base.add(i * SPOUT_MAX_NAME_LEN);
+                if *slot == 0 {
+                    total_count = i;
+                    break;
+                }
                 let mut len = 0usize;
-                while len < 256 {
+                while len < SPOUT_MAX_NAME_LEN {
                     if *slot.add(len) == 0 {
                         break;
                     }
                     len += 1;
                 }
-                if len == name_bytes.len()
+                if found_idx.is_none()
+                    && len == name_bytes.len()
                     && std::slice::from_raw_parts(slot, len) == name_bytes
                 {
-                    // Compact: shift remaining entries down one slot
-                    let remaining = count - i - 1;
-                    if remaining > 0 {
-                        std::ptr::copy(
-                            base.add(4 + (i as usize + 1) * 256),
-                            slot,
-                            remaining as usize * 256,
-                        );
-                    }
-                    // Zero the vacated last slot
-                    let last_slot = base.add(4 + (count - 1) as usize * 256);
-                    std::ptr::write_bytes(last_slot, 0, 256);
-                    *count_ptr = count - 1;
-                    log::info!("[Spout] Unregistered '{}' from SpoutSenderNames", self.sender_name);
-                    break;
+                    found_idx = Some(i);
                 }
+                if i == SPOUT_MAX_SENDERS - 1 {
+                    total_count = SPOUT_MAX_SENDERS;
+                }
+            }
+
+            if let Some(idx) = found_idx {
+                // Compact: shift remaining entries down one slot
+                let remaining = total_count.saturating_sub(idx + 1);
+                if remaining > 0 {
+                    std::ptr::copy(
+                        base.add((idx + 1) * SPOUT_MAX_NAME_LEN),
+                        base.add(idx * SPOUT_MAX_NAME_LEN),
+                        remaining * SPOUT_MAX_NAME_LEN,
+                    );
+                }
+                // Zero the vacated last slot (or the removed slot if it was last)
+                let last = if total_count > 0 { total_count - 1 } else { 0 };
+                std::ptr::write_bytes(
+                    base.add(last * SPOUT_MAX_NAME_LEN),
+                    0,
+                    SPOUT_MAX_NAME_LEN,
+                );
+                log::info!(
+                    "[Spout] Unregistered '{}' from SpoutSenderNames",
+                    self.sender_name
+                );
             }
 
             UnmapViewOfFile(view).ok();
@@ -389,7 +484,8 @@ impl SpoutOutput {
     ) -> Option<Vec<u8>> {
         let width = texture.width();
         let height = texture.height();
-        let bytes_per_row = width * 4;
+        // wgpu requires 256-byte aligned row pitch for COPY operations
+        let bytes_per_row = crate::engine::texture_utils::aligned_row_pitch_bgra(width);
 
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Spout Output Readback"),
@@ -449,6 +545,13 @@ impl Drop for SpoutOutput {
     fn drop(&mut self) {
         unsafe {
             self.unregister_spout_sender();
+            // Close the shared-memory mapping handles we kept alive
+            if !self._sender_info_map.is_invalid() && !self._sender_info_map.0.is_null() {
+                CloseHandle(self._sender_info_map).ok();
+            }
+            if !self._sender_names_map.is_invalid() && !self._sender_names_map.0.is_null() {
+                CloseHandle(self._sender_names_map).ok();
+            }
         }
         log::info!("[Spout] Sender '{}' dropped", self.sender_name);
     }

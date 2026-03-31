@@ -90,9 +90,7 @@ impl ControlGui {
 
             let spout_active = {
                 let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                // Mirror syphon_output pattern once SpoutOutputState is added to SharedState
-                // For now read from the output manager via command round-trip
-                matches!(state.output_command, OutputCommand::StartSpout { .. })
+                state.spout_output.enabled
             };
 
             ui.text_colored([0.3, 0.6, 1.0, 1.0], "Spout Output (Windows)");

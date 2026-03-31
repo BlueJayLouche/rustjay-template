@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
+      "Bash(ls:*)",
+      "Bash(echo \"INCLUDE=$INCLUDE\")",
+      "Bash(echo \"LIB=$LIB\")",
+      "Bash(grep -r \"nokhwa_initialize\\\\|fn initialize\\\\|fn init\\\\b\" C:UsersUser.cargoregistrysrcindex.crates.io-1949cf8c6b5b557fnokhwa-0.10.9src --include=*.rs)",
+      "Bash(grep -v \"^[0-9]*:\\\\s*//\")",
+      "Bash(cargo run:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(cargo check:*)",
+      "Bash(where clang:*)",
+      "Bash(grep -r \"libclang\\\\|clang\" C:UsersUserdeveloperrustrustjay-template --include=*.toml --include=*.rs)",
+      "Bash(xargs cat:*)",
+      "Bash(grep -r \"LIBCLANG\\\\|libclang\" C:UsersUserdeveloperrustrustjay-template --include=*.rs)",
+      "Bash(grep -r \"libclang\\\\|LIBCLANG\" C:UsersUserdeveloperrustrustjay-templatetargetdebug --include=*.txt)",
+      "Bash(winget list:*)",
+      "Bash(scoop list:*)",
+      "Bash(tr ';' '\\\\n')",
+      "Bash(find '/c/Program Files/Microsoft Visual Studio/2022' -name libclang* -o -name clang.dll)",
+      "Bash(find \"/c/Program Files \\(x86\\)\" -maxdepth 5 -name \"libclang.dll\")",
+      "Bash(powershell.exe -Command \"Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe' -OutFile 'C:\\\\Users\\\\User\\\\Downloads\\\\LLVM-18.1.8-win64.exe'\" 2>&1)",
+      "Bash(powershell.exe -Command \"Start-Process -FilePath 'C:\\\\Users\\\\User\\\\Downloads\\\\LLVM-18.1.8-win64.exe' -ArgumentList '/S','/D=C:\\\\Program Files\\\\LLVM' -Wait\" 2>&1)",
+      "Bash(export LIBCLANG_PATH=\"C:/Program Files/LLVM/bin\")",
+      "Bash(curl -sL https://raw.githubusercontent.com/leadedge/Spout2/master/SPOUTSDK/SpoutDirectX/SpoutSenderNames.h)"
+    ]
+  }
+}

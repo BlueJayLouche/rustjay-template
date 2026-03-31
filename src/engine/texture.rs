@@ -3,6 +3,7 @@
 //! Helper types and functions for wgpu texture management.
 //! All textures use BGRA8 format for native macOS compatibility.
 
+use crate::engine::texture_utils::{aligned_row_pitch_bgra, unaligned_row_pitch_bgra};
 use std::sync::Arc;
 
 /// Texture wrapper with common operations
@@ -80,6 +81,7 @@ impl Texture {
             data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
+                // write_texture doesn't require 256-byte alignment
                 bytes_per_row: Some(width * 4),
                 rows_per_image: Some(height),
             },
@@ -165,6 +167,7 @@ impl Texture {
             data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
+                // write_texture doesn't require 256-byte alignment
                 bytes_per_row: Some(self.width * 4),
                 rows_per_image: Some(self.height),
             },
@@ -236,16 +239,22 @@ impl InputTexture {
 
     /// Update with new BGRA frame data
     pub fn update(&mut self, data: &[u8], width: u32, height: u32) {
+        log::debug!("[InputTexture] Updating with {} bytes, {}x{}", data.len(), width, height);
         // Clear any external texture — we own the data now
         if self.ext_view.is_some() {
             self.ext_view = None;
             self.ext_sampler = None;
-            self.texture_generation += 1;
         }
         self.ensure_size(width, height);
         if let Some(ref tex) = self.texture {
             tex.update(&self.queue, data);
             self.has_data = true;
+            // Increment generation to signal that texture content changed
+            // This triggers bind group recreation in the renderer
+            self.texture_generation += 1;
+            log::debug!("[InputTexture] Texture updated, has_data=true, generation={}", self.texture_generation);
+        } else {
+            log::warn!("[InputTexture] No texture to update!");
         }
     }
 

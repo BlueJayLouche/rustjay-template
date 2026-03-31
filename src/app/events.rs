@@ -265,19 +265,16 @@ impl ApplicationHandler for App {
                     }
                     WindowEvent::Occluded(occluded) => {
                         self.output_occluded = occluded;
-                        log::debug!("Output window occluded: {}", occluded);
+                        log::info!("[Events] Output window occluded: {}", occluded);
                     }
                     WindowEvent::Resized(size) => {
                         if let Some(ref mut engine) = self.output_engine {
                             engine.resize(size.width, size.height);
                         }
                     }
-                    WindowEvent::RedrawRequested => {
-                        if let Some(ref mut engine) = self.output_engine {
-                            engine.render(self.output_occluded);
-                            self.update_preview_textures();
-                        }
-                    }
+                    // Note: Rendering is now done in about_to_wait() to ensure
+                    // continuous output even when the window is not focused.
+                    // Windows throttles RedrawRequested events for unfocused windows.
                     _ => {}
                 }
                 return;
@@ -312,21 +309,8 @@ impl ApplicationHandler for App {
                             renderer.set_display_size(logical_width, logical_height);
                         }
                     }
-                    WindowEvent::RedrawRequested => {
-                        if let (Some(ref mut renderer), Some(ref mut gui)) =
-                            (self.imgui_renderer.as_mut(), self.control_gui.as_mut())
-                        {
-                            let scale_factor = control_window.scale_factor();
-                            let window_size = control_window.inner_size();
-                            let logical_width = window_size.width as f32 / scale_factor as f32;
-                            let logical_height = window_size.height as f32 / scale_factor as f32;
-                            renderer.set_display_size(logical_width, logical_height);
-
-                            if let Err(err) = renderer.render_frame(|ui| gui.build_ui(ui)) {
-                                log::error!("ImGui render error: {}", err);
-                            }
-                        }
-                    }
+                    // Note: Control window rendering is now done in about_to_wait()
+                    // to ensure continuous UI updates regardless of focus.
                     _ => {}
                 }
                 return;
@@ -371,12 +355,28 @@ impl ApplicationHandler for App {
             self.save_settings();
         }
 
-        // Request redraws
-        if let Some(ref window) = self.output_window {
-            window.request_redraw();
+        // Render output directly here instead of relying on RedrawRequested.
+        // Windows throttles RedrawRequested events when the window isn't focused,
+        // which causes the output to freeze/go black when clicking on other windows.
+        // Rendering in about_to_wait() ensures continuous output regardless of focus.
+        if let Some(ref mut engine) = self.output_engine {
+            engine.render(self.output_occluded);
+            self.update_preview_textures();
         }
-        if let Some(ref window) = self.control_window {
-            window.request_redraw();
+
+        // Render control window UI
+        if let (Some(ref window), Some(ref mut renderer), Some(ref mut gui)) =
+            (self.control_window.as_ref(), self.imgui_renderer.as_mut(), self.control_gui.as_mut())
+        {
+            let scale_factor = window.scale_factor();
+            let window_size = window.inner_size();
+            let logical_width = window_size.width as f32 / scale_factor as f32;
+            let logical_height = window_size.height as f32 / scale_factor as f32;
+            renderer.set_display_size(logical_width, logical_height);
+
+            if let Err(err) = renderer.render_frame(|ui| gui.build_ui(ui)) {
+                log::error!("ImGui render error: {}", err);
+            }
         }
     }
 

@@ -36,6 +36,7 @@ mod engine;
 mod gui;
 mod input;
 mod midi;
+mod ndi_runtime;
 mod osc;
 mod output;
 mod presets;
@@ -55,6 +56,13 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     info!("Starting RustJay Template v{}", env!("CARGO_PKG_VERSION"));
+
+    // Initialize NDI runtime path on Windows (no-op on other platforms)
+    #[cfg(feature = "ndi")]
+    if let Err(e) = ndi_runtime::init() {
+        log::warn!("[NDI] Runtime initialization failed: {}", e);
+        log::warn!("[NDI] NDI features may not work. Install NDI Tools from https://ndi.tv/tools/");
+    }
 
     // Create shared state
     let shared_state = Arc::new(Mutex::new(SharedState::new()));

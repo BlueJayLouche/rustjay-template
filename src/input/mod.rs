@@ -143,7 +143,7 @@ pub struct InputManager {
     #[cfg(target_os = "macos")]
     syphon_queue: Option<std::sync::Arc<wgpu::Queue>>,
 
-    // Spout (Windows only) — TODO: replace () with real type from spout crate
+    // Spout (Windows only)
     #[cfg(target_os = "windows")]
     spout_receiver: Option<SpoutInputReceiver>,
 
@@ -301,7 +301,6 @@ impl InputManager {
                 servers
             };
 
-            // TODO (Windows): implement Spout sender discovery
             #[cfg(target_os = "windows")]
             let spout = {
                 log::info!("[InputManager] Discovering Spout senders...");
@@ -551,7 +550,10 @@ impl InputManager {
                 self.has_new_frame = true;
                 // Move pixel bytes into current_frame so take_frame() / InputTexture::update() works
                 if let Some(pixels) = spout.take_pixels() {
+                    log::debug!("[InputManager] Spout frame moved to current_frame: {} bytes", pixels.len());
                     self.current_frame = Some(pixels);
+                } else {
+                    log::warn!("[InputManager] take_pixels returned None!");
                 }
             }
         }

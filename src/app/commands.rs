@@ -158,6 +158,9 @@ impl App {
                     if let Err(e) = engine.start_spout_output(&sender_name) {
                         log::error!("Failed to start Spout output: {:?}", e);
                     } else {
+                        let mut state = lock(&self.shared_state);
+                        state.spout_output.sender_name = sender_name.clone();
+                        state.spout_output.enabled = true;
                         log::info!("Spout output started: {}", sender_name);
                     }
                 }
@@ -167,6 +170,7 @@ impl App {
                 if let Some(ref mut engine) = self.output_engine {
                     engine.stop_spout_output();
                 }
+                lock(&self.shared_state).spout_output.enabled = false;
                 log::info!("Spout output stopped");
             }
             #[cfg(target_os = "linux")]

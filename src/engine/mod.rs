@@ -6,6 +6,7 @@ pub mod blit;
 pub mod pipeline;
 pub mod renderer;
 pub mod texture;
+pub mod texture_utils;
 pub mod uniforms;
 
 pub use renderer::WgpuEngine;

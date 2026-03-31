@@ -73,9 +73,10 @@ cargo run
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────────┐  │
 │  │ Input Layer  │  │ Audio Layer  │  │    Output Layer              │  │
 │  │  - Webcam    │  │  - CPAL      │  │  - NDI Output                │  │
-│  │  - NDI In    │  │  - RealFFT   │  │  - Syphon Output             │  │
-│  │  - Syphon In │  │  - 8-bands   │  │  - Screen Output             │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────────────┘  │
+│  │  - NDI In    │  │  - RealFFT   │  │  - Spout Output (Win)        │  │
+│  │  - Spout In  │  │  - 8-bands   │  │  - Syphon Output (macOS)     │  │
+│  │  - Syphon In │  └──────────────┘  │  - Screen Output             │  │
+│  └──────────────┘                    └──────────────────────────────┘  │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                        Modulation System                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────────┐  │
@@ -112,10 +113,10 @@ src/
 │   ├── blit.rs      # BlitPipeline (cached — no per-frame allocation)
 │   └── texture.rs   # InputTexture, render target helpers
 ├── gui/           # ImGui tabs (input, color, audio, output, presets…)
-├── input/         # Webcam, NDI, Syphon input sources
+├── input/         # Webcam, NDI, Spout (Windows), Syphon (macOS) input sources
 ├── midi/          # CC mapping with learn system
 ├── osc/           # UDP OSC server
-├── output/        # NDI and Syphon output senders
+├── output/        # NDI, Spout (Windows), and Syphon (macOS) output senders
 ├── presets/       # Preset save/load/apply
 └── web/           # WebSocket remote control
 ```
@@ -152,6 +153,12 @@ This prevents feedback loops and ensures stable base values while allowing expre
 - Windows 10/11 (64-bit)
 - [Rust](https://rustup.rs/) 1.75+ with the `x86_64-pc-windows-msvc` toolchain
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload — required by the MSVC toolchain)
+- [LLVM](https://github.com/llvm/llvm-project/releases) — provides `libclang.dll`, required by `bindgen` (used by the NDI and webcam dependencies). Install the latest LLVM Windows release and set `LIBCLANG_PATH`:
+  ```powershell
+  # After installing LLVM to the default location:
+  set LIBCLANG_PATH=C:\Program Files\LLVM\bin
+  ```
+  The included `.cargo/config.toml` sets this automatically if LLVM is installed to the default path.
 - NDI Runtime (optional, for NDI support)
 
 ### Linux
@@ -226,7 +233,7 @@ cargo run --release
 |-----|--------|
 | `Esc` | Exit application |
 | `Space` | Toggle output fullscreen |
-| `1-4` | Switch input source (1=Test Pattern, 2=Webcam, 3=NDI, 4=Syphon) |
+| `1-5` | Switch input source (1=Test Pattern, 2=Webcam, 3=NDI, 4=Syphon, 5=Spout) |
 | `T` | Toggle test pattern |
 | `A` | Toggle audio visualization |
 | `Shift+F1-F8` | Load quick preset slot 1-8 |
@@ -235,7 +242,7 @@ cargo run --release
 ### GUI Tabs
 
 #### Input Tab
-- Device selection (webcam, NDI, Syphon)
+- Device selection (webcam, NDI, Spout on Windows, Syphon on macOS)
 - Refresh devices button
 - Input status display
 
@@ -252,6 +259,7 @@ cargo run --release
 
 #### Output Tab
 - NDI output name and toggle
+- Spout output name and toggle (Windows)
 - Syphon output name and toggle (macOS)
 - Fullscreen toggle
 
@@ -434,6 +442,28 @@ The application uses `Bgra8Unorm` throughout for:
 - **midir**: 0.10 (MIDI)
 
 ## Troubleshooting
+
+### `Unable to find libclang` (Windows)
+
+The NDI (`grafton-ndi`) and webcam (`nokhwa`) crates use `bindgen`, which requires `libclang.dll` at build time. If you see:
+
+```
+Unable to find libclang: "couldn't find any valid shared libraries matching: ['clang.dll', 'libclang.dll']"
+```
+
+**Fix:** Install [LLVM for Windows](https://github.com/llvm/llvm-project/releases) (the `LLVM-*-win64.exe` installer) and ensure `LIBCLANG_PATH` points to the `bin` directory:
+
+```powershell
+set LIBCLANG_PATH=C:\Program Files\LLVM\bin
+cargo build --release
+```
+
+The project's `.cargo/config.toml` sets this automatically for the default install path. If you installed LLVM elsewhere, update the `LIBCLANG_PATH` entry in that file.
+
+**Alternative:** If you don't need webcam or NDI support, build without those features:
+```powershell
+cargo build --release --no-default-features
+```
 
 ### "Library not loaded" errors
 

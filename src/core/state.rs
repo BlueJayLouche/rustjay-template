@@ -178,6 +178,15 @@ pub struct SyphonOutputState {
     pub enabled: bool,
 }
 
+/// Spout output state (Windows only)
+#[derive(Debug, Clone, Default)]
+pub struct SpoutOutputState {
+    /// Sender name visible to other apps
+    pub sender_name: String,
+    /// Whether output is enabled
+    pub enabled: bool,
+}
+
 /// Resolution configuration
 #[derive(Debug, Clone)]
 pub struct ResolutionState {
@@ -244,6 +253,10 @@ pub struct SharedState {
     // Syphon Output (macOS)
     #[cfg(target_os = "macos")]
     pub syphon_output: SyphonOutputState,
+
+    // Spout Output (Windows)
+    #[cfg(target_os = "windows")]
+    pub spout_output: SpoutOutputState,
 
     // Resolution settings
     pub resolution: ResolutionState,
@@ -355,6 +368,12 @@ impl SharedState {
             #[cfg(target_os = "macos")]
             syphon_output: SyphonOutputState {
                 server_name: "RustJay Template".to_string(),
+                enabled: false,
+            },
+
+            #[cfg(target_os = "windows")]
+            spout_output: SpoutOutputState {
+                sender_name: "RustJay".to_string(),
                 enabled: false,
             },
 

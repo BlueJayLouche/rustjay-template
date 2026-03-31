@@ -300,10 +300,12 @@ impl WgpuEngine {
         // Recreate the texture bind group only when the input texture changes.
         let current_gen = self.input_texture.texture_generation;
         if self.cached_texture_gen != current_gen {
+            log::debug!("[Renderer] Texture generation changed: {} -> {}", self.cached_texture_gen, current_gen);
             if let (Some(input_view), Some(input_sampler)) = (
                 self.input_texture.binding_view(),
                 self.input_texture.binding_sampler(),
             ) {
+                log::debug!("[Renderer] Creating new texture bind group");
                 self.cached_texture_bind_group =
                     Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("Texture Bind Group"),
@@ -324,9 +326,11 @@ impl WgpuEngine {
         }
 
         let Some(ref texture_bind_group) = self.cached_texture_bind_group else {
-            log::warn!("render: skipping frame, input texture unavailable");
+            log::warn!("[Renderer] Skipping frame, input texture unavailable");
             return;
         };
+        
+        log::debug!("[Renderer] Rendering frame {} with input texture (gen={}), occluded={}", self.frame_count, self.cached_texture_gen, occluded);
 
         // Update uniform buffer contents each frame (only the data changes, not the bind group).
         let hsb_uniforms: HsbUniforms = if color_enabled {

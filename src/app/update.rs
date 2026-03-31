@@ -54,16 +54,24 @@ impl App {
 
             #[cfg(not(target_os = "macos"))]
             {
+                log::trace!("[update_input] Checking for frame...");
                 if let Some(frame_data) = manager.take_frame() {
                     let (width, height) = manager.resolution();
+                    log::debug!("[update_input] Got frame: {}x{} ({} bytes)", width, height, frame_data.len());
 
                     if let Some(ref mut engine) = self.output_engine {
+                        log::debug!("[update_input] Updating input texture...");
                         engine.input_texture.update(&frame_data, width, height);
+                        log::debug!("[update_input] Texture updated");
+                    } else {
+                        log::warn!("[update_input] No output engine!");
                     }
 
                     let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
                     state.input.width = width;
                     state.input.height = height;
+                } else {
+                    log::trace!("[update_input] No frame available");
                 }
             }
         }

@@ -3,7 +3,7 @@
 //! Video output to other applications via:
 //! - NDI (cross-platform network)
 //! - Syphon (macOS GPU texture sharing)
-//! - Spout (Windows GPU texture sharing) - TODO
+//! - Spout (Windows GPU texture sharing)
 //! - v4l2loopback (Linux virtual camera) - TODO
 //!
 //! GPU readback uses a double-buffered staging pool so the render thread
@@ -312,7 +312,6 @@ impl OutputManager {
     }
 
     /// Start Spout output (Windows only)
-    /// TODO (Windows): implement this using SpoutOutput in spout_output.rs
     #[cfg(target_os = "windows")]
     pub fn start_spout(
         &mut self,
