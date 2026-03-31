@@ -239,7 +239,6 @@ impl InputTexture {
 
     /// Update with new BGRA frame data
     pub fn update(&mut self, data: &[u8], width: u32, height: u32) {
-        log::debug!("[InputTexture] Updating with {} bytes, {}x{}", data.len(), width, height);
         // Clear any external texture — we own the data now
         if self.ext_view.is_some() {
             self.ext_view = None;
@@ -249,12 +248,10 @@ impl InputTexture {
         if let Some(ref tex) = self.texture {
             tex.update(&self.queue, data);
             self.has_data = true;
-            // Increment generation to signal that texture content changed
-            // This triggers bind group recreation in the renderer
-            self.texture_generation += 1;
-            log::debug!("[InputTexture] Texture updated, has_data=true, generation={}", self.texture_generation);
-        } else {
-            log::warn!("[InputTexture] No texture to update!");
+            // Note: texture_generation is NOT incremented here — content
+            // updates via write_texture don't invalidate bind groups.
+            // Generation only changes when the underlying TextureView changes
+            // (resize, swap, external texture set/clear).
         }
     }
 

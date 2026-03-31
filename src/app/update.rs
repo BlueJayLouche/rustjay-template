@@ -52,26 +52,44 @@ impl App {
                 }
             }
 
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
             {
-                log::trace!("[update_input] Checking for frame...");
-                if let Some(frame_data) = manager.take_frame() {
-                    let (width, height) = manager.resolution();
-                    log::debug!("[update_input] Got frame: {}x{} ({} bytes)", width, height, frame_data.len());
-
-                    if let Some(ref mut engine) = self.output_engine {
-                        log::debug!("[update_input] Updating input texture...");
-                        engine.input_texture.update(&frame_data, width, height);
-                        log::debug!("[update_input] Texture updated");
-                    } else {
-                        log::warn!("[update_input] No output engine!");
+                // Spout zero-copy borrow path: pixels stay in the receiver's
+                // buffer and are written to the GPU texture without moving.
+                if manager.input_type() == crate::core::InputType::Spout {
+                    if manager.has_frame() {
+                        let (width, height) = manager.resolution();
+                        if let Some(pixels) = manager.spout_pixels() {
+                            if let Some(ref mut engine) = self.output_engine {
+                                engine.input_texture.update(pixels, width, height);
+                            }
+                            let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.input.width = width;
+                            state.input.height = height;
+                        }
+                        manager.clear_spout_frame();
                     }
-
+                } else if let Some(frame_data) = manager.take_frame() {
+                    let (width, height) = manager.resolution();
+                    if let Some(ref mut engine) = self.output_engine {
+                        engine.input_texture.update(&frame_data, width, height);
+                    }
                     let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
                     state.input.width = width;
                     state.input.height = height;
-                } else {
-                    log::trace!("[update_input] No frame available");
+                }
+            }
+
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                if let Some(frame_data) = manager.take_frame() {
+                    let (width, height) = manager.resolution();
+                    if let Some(ref mut engine) = self.output_engine {
+                        engine.input_texture.update(&frame_data, width, height);
+                    }
+                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.input.width = width;
+                    state.input.height = height;
                 }
             }
         }

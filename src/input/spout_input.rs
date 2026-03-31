@@ -366,29 +366,25 @@ impl SpoutInputReceiver {
     /// reads the BGRA pixels. Returns `true` when new pixels are ready.
     /// Call [`take_pixels`](Self::take_pixels) to move them out.
     pub fn try_receive_texture(&mut self) -> bool {
-        let sender_name = match self.sender_name.as_deref() {
-            Some(name) => name.to_string(),
-            None => return false,
-        };
+        if self.sender_name.is_none() {
+            return false;
+        }
 
         // (Re-)open if not connected yet or sender restarted
         if self.shared_texture.is_none() {
-            log::info!("[Spout Input] Opening shared texture for '{}'", sender_name);
             if let Err(e) = self.open_shared_texture() {
-                log::error!("[Spout Input] Failed to open texture for '{}': {}", sender_name, e);
+                log::error!("[Spout Input] Failed to open texture: {}", e);
                 return false;
             }
-            log::info!("[Spout Input] Successfully opened {}x{} texture from '{}'",
-                self.resolution.0, self.resolution.1, sender_name);
+            log::info!("[Spout Input] Opened {}x{} texture from '{}'",
+                self.resolution.0, self.resolution.1,
+                self.sender_name.as_deref().unwrap_or("?"));
         }
 
         let (w, h) = self.resolution;
         if w == 0 || h == 0 {
-            log::warn!("[Spout Input] Zero resolution: {}x{}", w, h);
             return false;
         }
-        
-        log::debug!("[Spout Input] Receiving frame {}x{}", w, h);
 
         unsafe {
             let shared_tex = match self.shared_texture.as_ref() {
@@ -401,16 +397,12 @@ impl SpoutInputReceiver {
             };
 
             // Copy under keyed mutex if present (sender uses key=0)
-            log::debug!("[Spout Input] Attempting to cast to keyed mutex...");
             let use_keyed_mutex = match shared_tex.cast::<IDXGIKeyedMutex>() {
                 Ok(keyed_mutex) => {
-                    log::debug!("[Spout Input] Keyed mutex found, acquiring...");
                     match keyed_mutex.AcquireSync(0, 1000) {
                         Ok(_) => {
-                            log::debug!("[Spout Input] Mutex acquired, copying resource...");
                             self.d3d_context.CopyResource(staging_tex, shared_tex);
                             self.d3d_context.Flush();
-                            log::debug!("[Spout Input] Resource copied, releasing mutex");
                             keyed_mutex.ReleaseSync(0).ok();
                             true
                         }
@@ -420,30 +412,22 @@ impl SpoutInputReceiver {
                         }
                     }
                 }
-                Err(e) => {
-                    log::debug!("[Spout Input] No keyed mutex: {:?}", e);
-                    false
-                }
+                Err(_) => false,
             };
-            
+
             if !use_keyed_mutex {
-                log::debug!("[Spout Input] Copying without keyed mutex...");
                 self.d3d_context.CopyResource(staging_tex, shared_tex);
                 self.d3d_context.Flush();
-                log::debug!("[Spout Input] Copy complete");
             }
 
-            // Map staging texture and read BGRA bytes row by row
-            log::debug!("[Spout Input] Mapping staging texture...");
+            // Map staging texture and read BGRA bytes
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             if let Err(e) = self.d3d_context.Map(staging_tex, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) {
                 log::error!("[Spout Input] Map failed: {:?}", e);
                 return false;
             }
-            log::debug!("[Spout Input] Staging texture mapped, pData={:?}, RowPitch={}", mapped.pData, mapped.RowPitch);
 
             let needed = (w * h * 4) as usize;
-            log::debug!("[Spout Input] Allocating buffer: {} bytes", needed);
             if self.pixel_buffer.len() != needed {
                 self.pixel_buffer.resize(needed, 0);
             }
@@ -452,19 +436,13 @@ impl SpoutInputReceiver {
             let row_pitch = mapped.RowPitch as usize;
             let dst_row_bytes = (w * 4) as usize;
 
-            log::debug!("[Spout Input] Copying pixels: row_pitch={}, dst_row_bytes={}", row_pitch, dst_row_bytes);
-            
-            // Fast path: if pitch matches, copy entire buffer at once
             if row_pitch == dst_row_bytes {
-                log::debug!("[Spout Input] Using fast memcpy path");
                 std::ptr::copy_nonoverlapping(
                     src,
                     self.pixel_buffer.as_mut_ptr(),
                     needed
                 );
             } else {
-                // Slow path: row-by-row copy with pitch difference
-                log::debug!("[Spout Input] Using row-by-row copy");
                 for row in 0..h as usize {
                     let src_row =
                         std::slice::from_raw_parts(src.add(row * row_pitch), dst_row_bytes);
@@ -472,10 +450,8 @@ impl SpoutInputReceiver {
                         .copy_from_slice(src_row);
                 }
             }
-            log::debug!("[Spout Input] Pixel copy complete");
 
             self.d3d_context.Unmap(staging_tex, 0);
-            log::info!("[Spout Input] Frame received ({}x{}, pitch={})", w, h, row_pitch);
         }
 
         true
@@ -490,6 +466,19 @@ impl SpoutInputReceiver {
             None
         } else {
             Some(std::mem::take(&mut self.pixel_buffer))
+        }
+    }
+
+    /// Borrow the pixel buffer without moving it.
+    ///
+    /// Returns `Some(&[u8])` (BGRA, row-major) when a frame is available.
+    /// The buffer is reused in-place on the next `try_receive_texture()`,
+    /// avoiding a per-frame reallocation.
+    pub fn pixels(&self) -> Option<&[u8]> {
+        if self.pixel_buffer.is_empty() {
+            None
+        } else {
+            Some(&self.pixel_buffer)
         }
     }
 

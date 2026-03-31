@@ -12,8 +12,8 @@
 //! 2. Create a D3D11 shared texture with `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`.
 //! 3. Register the sender in the two Spout2 shared-memory mappings:
 //!    `SpoutSenderNames` (flat name array) + per-sender `SharedTextureInfo`.
-//! 4. Each frame: read back the wgpu render target to CPU bytes, then
-//!    `UpdateSubresource` into the D3D11 shared texture under the keyed mutex.
+//! 4. Each frame: receive pre-read CPU bytes from the async readback pool,
+//!    then `UpdateSubresource` into the D3D11 shared texture under the keyed mutex.
 //!
 //! Receiving apps (Resolume, OBS Spout plugin, etc.) discover the sender via
 //! the shared memory registry and open the texture by its DXGI shared handle.
@@ -21,7 +21,6 @@
 #![cfg(target_os = "windows")]
 
 use crate::engine::texture_utils::dxgi_format;
-use std::sync::Arc;
 
 use windows::core::Interface;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
@@ -89,11 +88,7 @@ impl SpoutOutput {
     /// Create a new Spout sender with the given name.
     ///
     /// Initialises a standalone D3D11 device for texture sharing.
-    pub fn new(
-        name: &str,
-        _device: Arc<wgpu::Device>,
-        _queue: Arc<wgpu::Queue>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(name: &str) -> anyhow::Result<Self> {
         unsafe {
             let mut d3d_device = None;
             let mut d3d_context = None;
@@ -140,51 +135,41 @@ impl SpoutOutput {
         }
     }
 
-    /// Share the wgpu render target with connected Spout receivers.
-    pub fn submit_frame(
+    /// Share pre-read CPU bytes with connected Spout receivers.
+    ///
+    /// Called by `OutputManager` with bytes harvested from the async
+    /// `ReadbackPool` — no synchronous GPU readback happens here.
+    pub fn submit_bytes(
         &mut self,
-        texture: &wgpu::Texture,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        bytes: &[u8],
+        width: u32,
+        height: u32,
     ) -> anyhow::Result<()> {
-        let width = texture.width();
-        let height = texture.height();
-
         // (Re-)create the shared D3D11 texture when dimensions change
         if self.shared_texture.is_none() || self.width != width || self.height != height {
-            log::debug!("[Spout] Resizing shared texture from {}x{} to {}x{}",
-                self.width, self.height, width, height);
             self.shared_texture = None;
             self.create_shared_texture(width, height)?;
         }
-
-        // Read wgpu render target back to CPU bytes (BGRA)
-        let bytes = Self::read_texture_bgra(texture, device, queue)
-            .ok_or_else(|| anyhow::anyhow!("[Spout] GPU readback failed"))?;
 
         unsafe {
             let d3d_tex = self.shared_texture.as_ref().unwrap();
             let keyed_mutex: IDXGIKeyedMutex = d3d_tex.cast()?;
 
-            // Acquire mutex with sender key (0), INFINITE timeout to match Spout2 SDK.
             keyed_mutex.AcquireSync(0, 0xFFFFFFFF)?;
 
-            // Note: bytes buffer from readback is already 256-byte aligned
-            let row_pitch = crate::engine::texture_utils::aligned_row_pitch_bgra(width);
+            let row_pitch = width * 4;
             self.d3d_context.UpdateSubresource(
                 d3d_tex,
-                0,    // subresource
-                None, // full extent
+                0,
+                None,
                 bytes.as_ptr() as *const _,
                 row_pitch,
-                0,    // depth pitch (not a 3D texture)
+                0,
             );
 
-            // Release with sender key (0) so receiver can acquire with key 0
             keyed_mutex.ReleaseSync(0)?;
         }
 
-        log::trace!("[Spout] Frame submitted to '{}' ({}x{})", self.sender_name, width, height);
         Ok(())
     }
 
@@ -475,70 +460,6 @@ impl SpoutOutput {
         CloseHandle(hmap).ok();
     }
 
-    /// Identical to `OutputManager::read_texture_bgra` — reads a wgpu texture
-    /// back to CPU as a BGRA byte vec.
-    fn read_texture_bgra(
-        texture: &wgpu::Texture,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) -> Option<Vec<u8>> {
-        let width = texture.width();
-        let height = texture.height();
-        // wgpu requires 256-byte aligned row pitch for COPY operations
-        let bytes_per_row = crate::engine::texture_utils::aligned_row_pitch_bgra(width);
-
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Spout Output Readback"),
-            size: (bytes_per_row * height) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Spout Output Readback Encoder"),
-        });
-
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        queue.submit(std::iter::once(encoder.finish()));
-
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel::<bool>();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r.is_ok());
-        });
-        device.poll(wgpu::PollType::Wait).ok();
-
-        if rx.recv().ok()? {
-            let data = slice.get_mapped_range();
-            let bytes = data.to_vec();
-            drop(data);
-            staging.unmap();
-            Some(bytes)
-        } else {
-            None
-        }
-    }
 }
 
 impl Drop for SpoutOutput {

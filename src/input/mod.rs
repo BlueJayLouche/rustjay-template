@@ -542,19 +542,14 @@ impl InputManager {
             }
         }
 
-        // Handle Spout frames (CPU path on Windows — bytes → current_frame → InputTexture)
+        // Handle Spout frames (CPU path on Windows)
+        // Note: pixel data stays in SpoutInputReceiver's buffer and is
+        // borrowed via spout_pixels() to avoid per-frame Vec moves.
         #[cfg(target_os = "windows")]
         if let Some(ref mut spout) = self.spout_receiver {
             if spout.try_receive_texture() {
                 self.resolution = spout.resolution();
                 self.has_new_frame = true;
-                // Move pixel bytes into current_frame so take_frame() / InputTexture::update() works
-                if let Some(pixels) = spout.take_pixels() {
-                    log::debug!("[InputManager] Spout frame moved to current_frame: {} bytes", pixels.len());
-                    self.current_frame = Some(pixels);
-                } else {
-                    log::warn!("[InputManager] take_pixels returned None!");
-                }
             }
         }
     }
@@ -582,6 +577,21 @@ impl InputManager {
     /// Reset the new-frame flag for the Syphon path.
     #[cfg(target_os = "macos")]
     pub fn clear_syphon_frame(&mut self) {
+        self.has_new_frame = false;
+    }
+
+    /// Borrow the Spout pixel buffer without moving it (Windows only).
+    ///
+    /// Returns `Some(&[u8])` when a Spout frame is available. The buffer
+    /// is reused in-place on the next frame, avoiding per-frame allocation.
+    #[cfg(target_os = "windows")]
+    pub fn spout_pixels(&self) -> Option<&[u8]> {
+        self.spout_receiver.as_ref().and_then(|r| r.pixels())
+    }
+
+    /// Reset the new-frame flag for the Spout path.
+    #[cfg(target_os = "windows")]
+    pub fn clear_spout_frame(&mut self) {
         self.has_new_frame = false;
     }
 

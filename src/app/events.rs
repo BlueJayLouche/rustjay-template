@@ -318,7 +318,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Compute real elapsed time since last frame (capped to avoid spiral-of-death).
         let now = std::time::Instant::now();
         self.frame_delta_time = now
@@ -377,6 +377,17 @@ impl ApplicationHandler for App {
             if let Err(err) = renderer.render_frame(|ui| gui.build_ui(ui)) {
                 log::error!("ImGui render error: {}", err);
             }
+        }
+
+        // Cap the event loop to ~120 Hz to avoid burning CPU when vsync
+        // alone isn't throttling us (e.g. occluded output window, or the
+        // control window running at a lower refresh rate).
+        const TARGET_FRAME_DUR: std::time::Duration = std::time::Duration::from_micros(8333); // ~120 Hz
+        let elapsed = now.elapsed();
+        if elapsed < TARGET_FRAME_DUR {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                std::time::Instant::now() + (TARGET_FRAME_DUR - elapsed),
+            ));
         }
     }
 

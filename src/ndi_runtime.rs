@@ -24,6 +24,27 @@
 #[cfg(target_os = "windows")]
 use std::path::Path;
 
+/// NDI DLL name (Windows x64).
+#[cfg(target_os = "windows")]
+const NDI_DLL: &str = "Processing.NDI.Lib.x64.dll";
+
+/// Directories to search for the NDI runtime, most common first.
+#[cfg(target_os = "windows")]
+const SEARCH_DIRS: &[&str] = &[
+    // NDI 6 Runtime
+    "C:\\Program Files\\NDI\\NDI 6 Runtime\\v6",
+    "C:\\Program Files (x86)\\NDI\\NDI 6 Runtime\\v6",
+    // NDI 5 Runtime
+    "C:\\Program Files\\NDI\\NDI 5 Runtime\\v5",
+    "C:\\Program Files (x86)\\NDI\\NDI 5 Runtime\\v5",
+    // Older versions
+    "C:\\Program Files\\NDI\\NDI 4 Runtime\\v4",
+    "C:\\Program Files (x86)\\NDI\\NDI 4 Runtime\\v4",
+    // SDK paths (development fallback)
+    "C:\\Program Files\\NDI\\NDI 6 SDK\\Bin\\x64",
+    "C:\\Program Files\\NDI\\NDI 5 SDK\\Bin\\x64",
+];
+
 /// Initialize NDI runtime path.
 ///
 /// On Windows, searches for NDI runtime installation and adds it to the
@@ -32,12 +53,6 @@ use std::path::Path;
 /// # Returns
 /// - `Ok(())` if successful or not needed on this platform
 /// - `Err(String)` if NDI runtime cannot be found on Windows
-///
-/// # Example
-/// ```
-/// // Call this early in your application startup
-/// ndi_runtime::init().expect("NDI runtime not found");
-/// ```
 pub fn init() -> Result<(), String> {
     init_internal()
 }
@@ -46,84 +61,49 @@ pub fn init() -> Result<(), String> {
 fn init_internal() -> Result<(), String> {
     use windows::Win32::System::LibraryLoader::SetDllDirectoryW;
 
-    // Search paths for NDI runtime (most common first)
-    let search_paths = [
-        // NDI 6 Runtime
-        "C:\\Program Files\\NDI\\NDI 6 Runtime\\v6",
-        "C:\\Program Files (x86)\\NDI\\NDI 6 Runtime\\v6",
-        // NDI 5 Runtime
-        "C:\\Program Files\\NDI\\NDI 5 Runtime\\v5",
-        "C:\\Program Files (x86)\\NDI\\NDI 5 Runtime\\v5",
-        // Older versions
-        "C:\\Program Files\\NDI\\NDI 4 Runtime\\v4",
-        "C:\\Program Files (x86)\\NDI\\NDI 4 Runtime\\v4",
-        // SDK paths (development fallback)
-        "C:\\Program Files\\NDI\\NDI 6 SDK\\Bin\\x64",
-        "C:\\Program Files\\NDI\\NDI 5 SDK\\Bin\\x64",
-    ];
-
-    for path_str in &search_paths {
+    for path_str in SEARCH_DIRS {
         let path = Path::new(path_str);
-        if path.exists() {
-            // Check for the actual DLL
-            let dll_path = path.join("Processing.NDI.Lib.x64.dll");
-            if dll_path.exists() {
-                // Convert path to wide string for Windows API
-                let wide_path: Vec<u16> = path_str
-                    .encode_utf16()
-                    .chain(std::iter::once(0)) // null terminator
-                    .collect();
+        if path.join(NDI_DLL).exists() {
+            let wide_path: Vec<u16> = path_str
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
 
-                unsafe {
-                    // Add to DLL search path
-                    if SetDllDirectoryW(windows::core::PCWSTR(wide_path.as_ptr())).is_ok() {
-                        log::info!("[NDI Runtime] Added to DLL search path: {}", path_str);
-                        return Ok(());
-                    }
+            unsafe {
+                if SetDllDirectoryW(windows::core::PCWSTR(wide_path.as_ptr())).is_ok() {
+                    log::info!("[NDI Runtime] Added to DLL search path: {}", path_str);
+                    return Ok(());
                 }
             }
         }
     }
 
-    // If we get here, we couldn't find the NDI runtime
     Err(format!(
         "NDI runtime DLL not found. Searched paths:\n{}\n\n\
          Please install NDI Tools from https://ndi.tv/tools/",
-        search_paths.join("\n")
+        SEARCH_DIRS.join("\n")
     ))
 }
 
 #[cfg(not(target_os = "windows"))]
 fn init_internal() -> Result<(), String> {
-    // On macOS and Linux, NDI runtime is installed in standard library paths
-    // No special handling needed
     Ok(())
 }
 
 /// Check if NDI runtime is available without modifying paths.
-///
-/// This is useful for displaying a warning at startup without failing.
 pub fn is_available() -> bool {
     is_available_internal()
 }
 
 #[cfg(target_os = "windows")]
 fn is_available_internal() -> bool {
-    let search_paths = [
-        "C:\\Program Files\\NDI\\NDI 6 Runtime\\v6\\Processing.NDI.Lib.x64.dll",
-        "C:\\Program Files\\NDI\\NDI 5 Runtime\\v5\\Processing.NDI.Lib.x64.dll",
-        "C:\\Program Files\\NDI\\NDI 6 SDK\\Bin\\x64\\Processing.NDI.Lib.x64.dll",
-    ];
-
-    search_paths
+    SEARCH_DIRS
         .iter()
-        .any(|path| Path::new(path).exists())
+        .any(|dir| Path::new(dir).join(NDI_DLL).exists())
 }
 
 #[cfg(not(target_os = "windows"))]
 fn is_available_internal() -> bool {
-    // On macOS/Linux, we assume it's available if the feature is enabled
-    // The dynamic linker will report issues at load time
     true
 }
 

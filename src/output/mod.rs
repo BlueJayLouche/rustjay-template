@@ -316,10 +316,8 @@ impl OutputManager {
     pub fn start_spout(
         &mut self,
         sender_name: &str,
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
     ) -> anyhow::Result<()> {
-        let spout = spout_output::SpoutOutput::new(sender_name, device, queue)?;
+        let spout = spout_output::SpoutOutput::new(sender_name)?;
         self.spout_output = Some(spout);
         log::info!("Spout output started: {}", sender_name);
         Ok(())
@@ -373,10 +371,14 @@ impl OutputManager {
         false
     }
 
-    /// Returns true if any CPU-path output (NDI, V4L2) needs readback.
+    /// Returns true if any CPU-path output (NDI, V4L2, Spout) needs readback.
     fn needs_readback(&self) -> bool {
         #[cfg(feature = "ndi")]
         if self.ndi_output.is_some() {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        if self.spout_output.is_some() {
             return true;
         }
         #[cfg(target_os = "linux")]
@@ -408,6 +410,13 @@ impl OutputManager {
                     sender.submit_frame(&data, width, height);
                 }
 
+                #[cfg(target_os = "windows")]
+                if let Some(ref mut spout) = self.spout_output {
+                    if let Err(e) = spout.submit_bytes(&data, width, height) {
+                        log::error!("Spout output error: {}", e);
+                    }
+                }
+
                 #[cfg(target_os = "linux")]
                 if let Some(ref mut v4l2) = self.v4l2_output {
                     if let Err(e) = v4l2.send_frame(&data) {
@@ -428,13 +437,8 @@ impl OutputManager {
             }
         }
 
-        // Spout output (zero-copy on Windows)
-        #[cfg(target_os = "windows")]
-        if let Some(ref mut spout) = self.spout_output {
-            if let Err(e) = spout.submit_frame(texture, device, queue) {
-                log::error!("Spout output error: {}", e);
-            }
-        }
+        // Note: Spout is now fed from the readback pool above (CPU path),
+        // not directly from the GPU texture.
     }
 
     /// Check if NDI is active
