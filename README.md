@@ -153,12 +153,10 @@ This prevents feedback loops and ensures stable base values while allowing expre
 - Windows 10/11 (64-bit)
 - [Rust](https://rustup.rs/) 1.75+ with the `x86_64-pc-windows-msvc` toolchain
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload — required by the MSVC toolchain)
-- [LLVM](https://github.com/llvm/llvm-project/releases) — provides `libclang.dll`, required by `bindgen` (used by the NDI and webcam dependencies). Install the latest LLVM Windows release and set `LIBCLANG_PATH`:
+- [LLVM](https://github.com/llvm/llvm-project/releases) (optional) — provides `libclang.dll`, required by `bindgen` if building with the `webcam` or `ndi` features. Install the latest LLVM Windows release and set `LIBCLANG_PATH`:
   ```powershell
-  # After installing LLVM to the default location:
   set LIBCLANG_PATH=C:\Program Files\LLVM\bin
   ```
-  The included `.cargo/config.toml` sets this automatically if LLVM is installed to the default path.
 - NDI Runtime (optional, for NDI support)
 
 ### Linux
@@ -181,10 +179,16 @@ cargo build --release
 
 ### NDI Support (Optional)
 
-To enable NDI input/output, install the NDI SDK:
+NDI is not included in the default build. To enable NDI input/output:
 
+```bash
+cargo build --release --features ndi
+```
+
+You will also need the NDI SDK installed:
 1. Download NDI SDK for your platform from [NDI.tv](https://ndi.tv)
 2. On macOS, the build system will automatically find it in `/usr/local/lib` or `/Library/NDI SDK for Apple/lib/macOS`
+3. On Windows, LLVM must also be installed (NDI's build script uses `bindgen`)
 
 ### Syphon Support (macOS Only)
 
@@ -458,11 +462,13 @@ set LIBCLANG_PATH=C:\Program Files\LLVM\bin
 cargo build --release
 ```
 
-The project's `.cargo/config.toml` sets this automatically for the default install path. If you installed LLVM elsewhere, update the `LIBCLANG_PATH` entry in that file.
-
-**Alternative:** If you don't need webcam or NDI support, build without those features:
+**Alternative:** The default build does not require LLVM. This error only occurs if you opt in to `webcam` or `ndi` features:
 ```powershell
+# Default build — no LLVM needed
 cargo build --release --no-default-features
+
+# With webcam (needs LLVM)
+cargo build --release --features webcam
 ```
 
 ### "Library not loaded" errors
