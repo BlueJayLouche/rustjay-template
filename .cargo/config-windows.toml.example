@@ -1,6 +1,11 @@
-# VS 2026 (14.50) is an incomplete installation — cl.exe exists but include/
-# and lib/x64/ are missing. Force all C/C++ compilation and linking to use
-# VS 2022 (14.44) which has the full Desktop development toolchain.
+# Windows-specific cargo configuration
+#
+# If VS 2026 (14.50) is an incomplete installation — cl.exe exists but include/
+# and lib/x64/ are missing — copy this file to .cargo/config.toml to force all
+# C/C++ compilation and linking to use VS 2022 (14.44).
+#
+# Alternatively, run builds from a VS 2022 Developer Command Prompt which sets
+# INCLUDE, LIB, and PATH correctly.
 
 [target.x86_64-pc-windows-msvc]
 linker = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe"

@@ -2,6 +2,9 @@
 /target/
 Cargo.lock
 
+# Machine-specific cargo config (use .cargo/config-*.toml.example as templates)
+.cargo/config.toml
+
 # IDE
 .idea/
 .vscode/
