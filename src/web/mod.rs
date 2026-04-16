@@ -38,8 +38,8 @@ pub struct WebConfig {
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
-            port: 8080,
-            app_name: "rustjay".to_string(),
+            port: 8081,
+            app_name: "rustjay-template".to_string(),
             enabled: false,
         }
     }

@@ -40,7 +40,7 @@ pub struct OscConfig {
 impl Default for OscConfig {
     fn default() -> Self {
         Self {
-            port: 9000,
+            port: 9001,
             enabled: false,
             base_address: "/rustjay-template".to_string(),
         }
@@ -77,19 +77,30 @@ pub struct AppSettings {
     pub ndi_stream_name: String,
     #[cfg(feature = "ndi")]
     pub ndi_include_alpha: bool,
-    
+
     /// Syphon output settings (macOS)
     #[cfg(target_os = "macos")]
     pub syphon_server_name: String,
-    
+
+    /// Spout output settings (Windows)
+    #[cfg(target_os = "windows")]
+    pub spout_output_name: String,
+
+    /// V4L2 loopback output settings (Linux)
+    #[cfg(target_os = "linux")]
+    pub v4l2_device_path: String,
+
     /// MIDI settings
     pub midi_enabled: bool,
     pub midi_device: Option<String>,
     pub midi_mappings: Vec<MidiMappingConfig>,
-    
+
     /// OSC settings
     pub osc: OscConfig,
-    
+
+    /// Web server settings
+    pub web_port: u16,
+
     /// UI settings
     pub ui_scale: f32,
     pub show_preview: bool,
@@ -117,10 +128,15 @@ impl Default for AppSettings {
             ndi_include_alpha: false,
             #[cfg(target_os = "macos")]
             syphon_server_name: "RustJay Template".to_string(),
+            #[cfg(target_os = "windows")]
+            spout_output_name: "RustJay Template".to_string(),
+            #[cfg(target_os = "linux")]
+            v4l2_device_path: "/dev/video12".to_string(),
             midi_enabled: false,
             midi_device: None,
             midi_mappings: Vec::new(),
             osc: OscConfig::default(),
+            web_port: 8081,
             ui_scale: 1.0,
             show_preview: true,
         }
@@ -177,14 +193,14 @@ impl AppSettings {
     pub fn config_path() -> anyhow::Result<PathBuf> {
         let dirs = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
-        Ok(dirs.join("rustjay").join("settings.json"))
+        Ok(dirs.join("rustjay").join("template.json"))
     }
-    
+
     /// Get presets directory path
     pub fn presets_dir() -> anyhow::Result<PathBuf> {
         let dirs = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
-        Ok(dirs.join("rustjay").join("presets"))
+        Ok(dirs.join("rustjay").join("template").join("presets"))
     }
     
     /// Apply settings to shared state
@@ -211,10 +227,20 @@ impl AppSettings {
         {
             state.syphon_output.server_name = self.syphon_server_name.clone();
         }
+        #[cfg(target_os = "windows")]
+        {
+            state.spout_output.sender_name = self.spout_output_name.clone();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            state.v4l2_output.device_path = self.v4l2_device_path.clone();
+        }
+        state.osc_port = self.osc.port;
+        state.web_port = self.web_port;
         state.ui_scale = self.ui_scale;
         state.show_preview = self.show_preview;
     }
-    
+
     /// Extract settings from shared state
     pub fn from_state(state: &SharedState) -> Self {
         Self {
@@ -237,10 +263,19 @@ impl AppSettings {
             ndi_include_alpha: state.ndi_output.include_alpha,
             #[cfg(target_os = "macos")]
             syphon_server_name: state.syphon_output.server_name.clone(),
+            #[cfg(target_os = "windows")]
+            spout_output_name: state.spout_output.sender_name.clone(),
+            #[cfg(target_os = "linux")]
+            v4l2_device_path: state.v4l2_output.device_path.clone(),
             midi_enabled: false, // Will be set separately
             midi_device: None,
             midi_mappings: Vec::new(),
-            osc: OscConfig::default(),
+            osc: OscConfig {
+                port: state.osc_port,
+                enabled: state.osc_enabled,
+                base_address: "/rustjay-template".to_string(),
+            },
+            web_port: state.web_port,
             ui_scale: state.ui_scale,
             show_preview: state.show_preview,
         }

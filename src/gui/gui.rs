@@ -122,7 +122,7 @@ impl ControlGui {
             #[cfg(target_os = "windows")]
             selected_spout: 0,
             #[cfg(target_os = "windows")]
-            spout_output_name: "RustJay".to_string(),
+            spout_output_name: "RustJay Template".to_string(),
             #[cfg(target_os = "linux")]
             v4l2_capture_devices: Vec::new(),
             #[cfg(target_os = "linux")]
@@ -132,7 +132,7 @@ impl ControlGui {
             #[cfg(target_os = "linux")]
             selected_v4l2_output: 0,
             #[cfg(target_os = "linux")]
-            v4l2_device_path: "/dev/video10".to_string(),
+            v4l2_device_path: "/dev/video12".to_string(),
             input_preview_texture_id: None,
             output_preview_texture_id: None,
             pending_internal_width: internal_w,

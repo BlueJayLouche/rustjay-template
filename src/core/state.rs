@@ -387,13 +387,13 @@ impl SharedState {
 
             #[cfg(target_os = "windows")]
             spout_output: SpoutOutputState {
-                sender_name: "RustJay".to_string(),
+                sender_name: "RustJay Template".to_string(),
                 enabled: false,
             },
 
             #[cfg(target_os = "linux")]
             v4l2_output: V4l2OutputState {
-                device_path: "/dev/video10".to_string(),
+                device_path: "/dev/video12".to_string(),
                 enabled: false,
             },
 
@@ -408,7 +408,7 @@ impl SharedState {
             midi_command: MidiCommand::None,
             osc_command: OscCommand::None,
             osc_enabled: false,
-            osc_port: 9000,
+            osc_port: 9001,
             preset_command: PresetCommand::None,
             preset_names: Vec::new(),
             preset_quick_slot_names: Default::default(),
@@ -416,7 +416,7 @@ impl SharedState {
             
             web_command: WebCommand::None,
             web_enabled: false,
-            web_port: 8080,
+            web_port: 8081,
 
             lfo: LfoState::new(),
 
