@@ -113,6 +113,10 @@ struct DiscoveryResults {
     syphon: Vec<SyphonServerInfo>,
     #[cfg(target_os = "windows")]
     spout: Vec<SpoutSenderInfo>,
+    #[cfg(target_os = "linux")]
+    v4l2_capture: Vec<crate::v4l2_devices::V4l2DeviceInfo>,
+    #[cfg(target_os = "linux")]
+    v4l2_output: Vec<crate::v4l2_devices::V4l2DeviceInfo>,
 }
 
 /// Manages a single video input source with hot-swappable backends
@@ -158,6 +162,10 @@ pub struct InputManager {
     syphon_servers: Option<Vec<SyphonServerInfo>>,
     #[cfg(target_os = "windows")]
     spout_senders: Option<Vec<SpoutSenderInfo>>,
+    #[cfg(target_os = "linux")]
+    v4l2_capture_devices: Option<Vec<crate::v4l2_devices::V4l2DeviceInfo>>,
+    #[cfg(target_os = "linux")]
+    v4l2_output_devices: Option<Vec<crate::v4l2_devices::V4l2DeviceInfo>>,
 
     // Background discovery
     discovery_rx: Option<mpsc::Receiver<DiscoveryResults>>,
@@ -195,9 +203,25 @@ impl InputManager {
             syphon_servers: None,
             #[cfg(target_os = "windows")]
             spout_senders: None,
+            #[cfg(target_os = "linux")]
+            v4l2_capture_devices: None,
+            #[cfg(target_os = "linux")]
+            v4l2_output_devices: None,
             discovery_rx: None,
             is_discovering: false,
         }
+    }
+
+    /// Get cached list of V4L2 capture devices (Linux only; empty until discovery completes)
+    #[cfg(target_os = "linux")]
+    pub fn v4l2_capture_devices(&self) -> &[crate::v4l2_devices::V4l2DeviceInfo] {
+        self.v4l2_capture_devices.as_deref().unwrap_or(&[])
+    }
+
+    /// Get cached list of V4L2 output (loopback) devices (Linux only)
+    #[cfg(target_os = "linux")]
+    pub fn v4l2_output_devices(&self) -> &[crate::v4l2_devices::V4l2DeviceInfo] {
+        self.v4l2_output_devices.as_deref().unwrap_or(&[])
     }
 
     /// Initialize with wgpu device/queue (required for Syphon on macOS)
@@ -264,6 +288,11 @@ impl InputManager {
         {
             self.spout_senders = None;
         }
+        #[cfg(target_os = "linux")]
+        {
+            self.v4l2_capture_devices = None;
+            self.v4l2_output_devices = None;
+        }
 
         self.is_discovering = true;
         let (tx, rx) = mpsc::channel();
@@ -309,6 +338,25 @@ impl InputManager {
                 senders
             };
 
+            #[cfg(target_os = "linux")]
+            let (v4l2_capture, v4l2_output) = {
+                log::info!("[InputManager] Discovering V4L2 devices...");
+                let cap = crate::v4l2_devices::list_capture_devices();
+                let out = crate::v4l2_devices::list_output_devices();
+                log::info!(
+                    "[InputManager] Found {} V4L2 capture, {} V4L2 output device(s)",
+                    cap.len(),
+                    out.len()
+                );
+                for d in &cap {
+                    log::info!("  - [capture] {}", d.display_name());
+                }
+                for d in &out {
+                    log::info!("  - [output]  {}", d.display_name());
+                }
+                (cap, out)
+            };
+
             let _ = tx.send(DiscoveryResults {
                 webcam,
                 #[cfg(feature = "ndi")]
@@ -317,6 +365,10 @@ impl InputManager {
                 syphon,
                 #[cfg(target_os = "windows")]
                 spout,
+                #[cfg(target_os = "linux")]
+                v4l2_capture,
+                #[cfg(target_os = "linux")]
+                v4l2_output,
             });
         });
     }
@@ -343,6 +395,11 @@ impl InputManager {
             #[cfg(target_os = "windows")]
             {
                 self.spout_senders = Some(result.spout);
+            }
+            #[cfg(target_os = "linux")]
+            {
+                self.v4l2_capture_devices = Some(result.v4l2_capture);
+                self.v4l2_output_devices = Some(result.v4l2_output);
             }
             self.is_discovering = false;
             self.discovery_rx = None;

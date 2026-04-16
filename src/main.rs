@@ -40,6 +40,8 @@ mod ndi_runtime;
 mod osc;
 mod output;
 mod presets;
+#[cfg(target_os = "linux")]
+mod v4l2_devices;
 mod web;
 
 use core::SharedState;

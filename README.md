@@ -27,7 +27,8 @@ cargo run
 - **ImGui Interface**: Immediate mode GUI for controls and preview
 
 ### Input Sources
-- **Webcam** (via nokhwa)
+- **Webcam** (via nokhwa) — on macOS/Windows
+- **V4L2** (Linux — real webcams and any `/dev/video*` capture node)
 - **NDI** (Network Device Interface via grafton-ndi)
 - **Syphon** (macOS GPU texture sharing - macOS only)
 - **Spout** (Windows GPU texture sharing - Windows only)
@@ -38,6 +39,7 @@ cargo run
 - **NDI output**
 - **Syphon output** (macOS only)
 - **Spout output** (Windows only)
+- **V4L2 loopback output** (Linux only — stream into a virtual webcam)
 
 ### Modulation System
 
@@ -219,6 +221,77 @@ cargo run --release
 
 Open Resolume Arena, OBS (with [OBS-Spout2-Plugin](https://github.com/Off-World-Live/obs-spout2-plugin)), or any Spout-capable app on the same machine and verify texture sharing works via the **Input** and **Output** tabs.
 
+### V4L2 Support (Linux Only)
+
+On Linux, video I/O uses Video4Linux2 (V4L2):
+
+- **V4L2 Input** — real webcams and any `/dev/video*` capture node are enumerated natively in the **Input** tab.
+- **V4L2 Output** — frames are written to a virtual camera device created by the [`v4l2loopback`](https://github.com/umlaeute/v4l2loopback) kernel module. Other apps (OBS, ffplay, Chromium, Firefox) then read from the virtual camera as if it were a real webcam.
+
+#### 1. Install `v4l2loopback`
+
+```bash
+# Arch / Manjaro
+sudo pacman -S v4l2loopback-dkms v4l-utils
+
+# Debian / Ubuntu
+sudo apt install v4l2loopback-dkms v4l-utils
+```
+
+#### 2. Load the kernel module with a virtual device
+
+```bash
+sudo modprobe v4l2loopback devices=1 video_nr=10 \
+    card_label="RustJay Output" exclusive_caps=1
+```
+
+Flags:
+- `video_nr=10` — the virtual device node, so it appears as `/dev/video10`. Pick any free number.
+- `card_label="RustJay Output"` — the name that consumer apps (OBS, browsers) will display.
+- `exclusive_caps=1` — required for Chromium/Firefox to recognize the device as a webcam.
+
+Verify it worked:
+
+```bash
+v4l2-ctl --list-devices
+# → RustJay Output (platform:v4l2loopback-000):
+#       /dev/video10
+```
+
+Make it persist across reboots:
+
+```bash
+echo "v4l2loopback" | sudo tee /etc/modules-load.d/v4l2loopback.conf
+echo "options v4l2loopback devices=1 video_nr=10 card_label=\"RustJay Output\" exclusive_caps=1" \
+  | sudo tee /etc/modprobe.d/v4l2loopback.conf
+```
+
+#### 3. Start the stream
+
+```bash
+cargo run --release
+```
+
+In the control window → **Output** tab:
+1. The "V4L2 Loopback Output" section lists all detected virtual cameras in a combo box.
+2. Select `RustJay Output (/dev/video10)` and click **Start V4L2 Output**.
+3. The status indicator turns green when streaming.
+
+Consume the stream from any webcam-aware app:
+
+```bash
+ffplay /dev/video10
+```
+
+Or in OBS: **Sources → Video Capture Device → Device: RustJay Output**.
+Or in a browser: open any webcam test site and pick "RustJay Output" from the camera list.
+
+#### Format notes
+
+- Frames are written as **YUYV 4:2:2** — the most compatible format across browsers, OBS, and ffmpeg-based tools.
+- BGRA→YUYV conversion is done on the CPU with a pre-allocated scratch buffer (no per-frame allocation) using BT.601 limited-range coefficients.
+- If the render resolution changes while the output is running, the V4L2 device is automatically reopened at the new size.
+
 ## Running
 
 ```bash
@@ -246,7 +319,7 @@ cargo run --release
 ### GUI Tabs
 
 #### Input Tab
-- Device selection (webcam, NDI, Spout on Windows, Syphon on macOS)
+- Device selection (webcam, NDI, Spout on Windows, Syphon on macOS, V4L2 on Linux)
 - Refresh devices button
 - Input status display
 
@@ -265,6 +338,7 @@ cargo run --release
 - NDI output name and toggle
 - Spout output name and toggle (Windows)
 - Syphon output name and toggle (macOS)
+- V4L2 loopback device selector + toggle (Linux)
 - Fullscreen toggle
 
 #### Presets Tab

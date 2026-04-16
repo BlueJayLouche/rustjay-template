@@ -187,6 +187,16 @@ pub struct SpoutOutputState {
     pub enabled: bool,
 }
 
+/// V4L2 loopback output state (Linux only)
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Default)]
+pub struct V4l2OutputState {
+    /// Currently-selected device path (e.g. `/dev/video10`)
+    pub device_path: String,
+    /// Whether output is enabled
+    pub enabled: bool,
+}
+
 /// Resolution configuration
 #[derive(Debug, Clone)]
 pub struct ResolutionState {
@@ -257,6 +267,10 @@ pub struct SharedState {
     // Spout Output (Windows)
     #[cfg(target_os = "windows")]
     pub spout_output: SpoutOutputState,
+
+    // V4L2 Output (Linux)
+    #[cfg(target_os = "linux")]
+    pub v4l2_output: V4l2OutputState,
 
     // Resolution settings
     pub resolution: ResolutionState,
@@ -374,6 +388,12 @@ impl SharedState {
             #[cfg(target_os = "windows")]
             spout_output: SpoutOutputState {
                 sender_name: "RustJay".to_string(),
+                enabled: false,
+            },
+
+            #[cfg(target_os = "linux")]
+            v4l2_output: V4l2OutputState {
+                device_path: "/dev/video10".to_string(),
                 enabled: false,
             },
 

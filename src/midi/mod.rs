@@ -353,7 +353,7 @@ impl MidiManager {
                 }
             },
             (),
-        )?;
+        ).map_err(|e| anyhow::anyhow!("MIDI connect error: {}", e))?;
         
         self.connection = Some(conn);
         

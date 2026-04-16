@@ -87,9 +87,33 @@ impl App {
             }
             #[cfg(target_os = "linux")]
             InputCommand::StartV4l2 { device_path } => {
-                // V4L2 input on Linux is handled by nokhwa (webcam backend).
-                // This command is a placeholder for a dedicated V4L2 input if needed.
-                log::info!("StartV4l2 input command received (device: {}) — handled via webcam/nokhwa", device_path);
+                // On Linux, V4L2 capture is handled by the shared nokhwa backend —
+                // `CameraIndex::Index(N)` maps to `/dev/videoN`.  We parse the
+                // numeric suffix out of the selected path and start the webcam
+                // pipeline with the matching index.
+                let index = device_path
+                    .rsplit("video")
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok());
+
+                match (index, self.input_manager.as_mut()) {
+                    (Some(idx), Some(manager)) => {
+                        log::info!("Starting V4L2 input: {} (index {})", device_path, idx);
+                        match manager.start_webcam(idx as usize, 1920, 1080, 30) {
+                            Ok(_) => {
+                                let mut state = lock(&self.shared_state);
+                                state.input.is_active = true;
+                                state.input.input_type = crate::core::InputType::V4l2;
+                                state.input.source_name = device_path;
+                            }
+                            Err(e) => log::error!("Failed to start V4L2 input: {:?}", e),
+                        }
+                    }
+                    (None, _) => {
+                        log::error!("StartV4l2: could not parse device index from '{}'", device_path);
+                    }
+                    _ => {}
+                }
             }
             InputCommand::StopInput => {
                 if let Some(ref mut manager) = self.input_manager {
@@ -179,6 +203,9 @@ impl App {
                     if let Err(e) = engine.start_v4l2_output(&device_path) {
                         log::error!("Failed to start V4L2 output: {:?}", e);
                     } else {
+                        let mut state = lock(&self.shared_state);
+                        state.v4l2_output.device_path = device_path.clone();
+                        state.v4l2_output.enabled = true;
                         log::info!("V4L2 output started: {}", device_path);
                     }
                 }
@@ -188,6 +215,7 @@ impl App {
                 if let Some(ref mut engine) = self.output_engine {
                     engine.stop_v4l2_output();
                 }
+                lock(&self.shared_state).v4l2_output.enabled = false;
                 log::info!("V4L2 output stopped");
             }
             OutputCommand::ResizeOutput => {

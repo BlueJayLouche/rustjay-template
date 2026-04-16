@@ -43,23 +43,26 @@ impl ControlGui {
         ui.separator();
         ui.spacing();
 
-        // Webcam section
-        ui.text_colored([0.0, 1.0, 1.0, 1.0], "Webcam");
-        if !self.webcam_devices.is_empty() {
-            let device_names: Vec<&str> = self.webcam_devices.iter().map(|s| s.as_str()).collect();
-            ui.combo_simple_string("Select Webcam", &mut self.selected_webcam, &device_names);
+        // Webcam section — on Linux, webcams are shown in the V4L2 section below.
+        #[cfg(not(target_os = "linux"))]
+        {
+            ui.text_colored([0.0, 1.0, 1.0, 1.0], "Webcam");
+            if !self.webcam_devices.is_empty() {
+                let device_names: Vec<&str> = self.webcam_devices.iter().map(|s| s.as_str()).collect();
+                ui.combo_simple_string("Select Webcam", &mut self.selected_webcam, &device_names);
 
-            if ui.button("Start Webcam") {
-                let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                state.input_command = InputCommand::StartWebcam {
-                    device_index: self.selected_webcam as usize,
-                    width: 1920,
-                    height: 1080,
-                    fps: 30,
-                };
+                if ui.button("Start Webcam") {
+                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.input_command = InputCommand::StartWebcam {
+                        device_index: self.selected_webcam as usize,
+                        width: 1920,
+                        height: 1080,
+                        fps: 30,
+                    };
+                }
+            } else {
+                ui.text_disabled("No webcams found");
             }
-        } else {
-            ui.text_disabled("No webcams found");
         }
 
         // NDI section
@@ -113,6 +116,41 @@ impl ControlGui {
                 }
             } else {
                 ui.text_disabled("No Syphon servers found");
+            }
+        }
+
+        // V4L2 section (Linux only)
+        #[cfg(target_os = "linux")]
+        {
+            ui.spacing();
+            ui.separator();
+            ui.spacing();
+
+            ui.text_colored([0.8, 0.8, 0.2, 1.0], "V4L2 Input (Linux)");
+            if !self.v4l2_capture_devices.is_empty() {
+                let labels: Vec<String> = self
+                    .v4l2_capture_devices
+                    .iter()
+                    .map(|d| d.display_name())
+                    .collect();
+                let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+                ui.combo_simple_string(
+                    "Select V4L2 Device",
+                    &mut self.selected_v4l2_capture,
+                    &label_refs,
+                );
+
+                if ui.button("Start V4L2 Input") {
+                    if let Some(info) = self.v4l2_capture_devices.get(self.selected_v4l2_capture) {
+                        let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.input_command = InputCommand::StartV4l2 {
+                            device_path: info.path.clone(),
+                        };
+                    }
+                }
+            } else {
+                ui.text_disabled("No V4L2 capture devices found");
+                ui.text_disabled("Click Refresh Sources above to scan");
             }
         }
 

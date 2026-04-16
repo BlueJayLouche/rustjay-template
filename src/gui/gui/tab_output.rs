@@ -119,20 +119,52 @@ impl ControlGui {
             ui.separator();
             ui.spacing();
 
+            let v4l2_active = {
+                let state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                state.v4l2_output.enabled
+            };
+
             ui.text_colored([0.8, 0.8, 0.2, 1.0], "V4L2 Loopback Output (Linux)");
             ui.text_disabled("Requires v4l2loopback kernel module");
-            ui.input_text("Device Path", &mut self.v4l2_device_path).build();
 
-            if ui.button("Start V4L2 Output") {
-                let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                state.output_command = OutputCommand::StartV4l2 {
-                    device_path: self.v4l2_device_path.clone(),
-                };
+            if !self.v4l2_output_devices.is_empty() {
+                let labels: Vec<String> = self
+                    .v4l2_output_devices
+                    .iter()
+                    .map(|d| d.display_name())
+                    .collect();
+                let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+                if ui.combo_simple_string(
+                    "Loopback Device",
+                    &mut self.selected_v4l2_output,
+                    &label_refs,
+                ) {
+                    if let Some(d) = self.v4l2_output_devices.get(self.selected_v4l2_output) {
+                        self.v4l2_device_path = d.path.clone();
+                    }
+                }
+            } else {
+                ui.text_disabled("No v4l2loopback devices found — see README for setup");
+                ui.input_text("Device Path", &mut self.v4l2_device_path).build();
             }
-            ui.same_line();
-            if ui.button("Stop V4L2 Output") {
-                let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
-                state.output_command = OutputCommand::StopV4l2;
+
+            if !v4l2_active {
+                if ui.button("Start V4L2 Output") {
+                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.output_command = OutputCommand::StartV4l2 {
+                        device_path: self.v4l2_device_path.clone(),
+                    };
+                }
+            } else {
+                if ui.button("Stop V4L2 Output") {
+                    let mut state = self.shared_state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.output_command = OutputCommand::StopV4l2;
+                }
+                ui.same_line();
+                ui.text_colored(
+                    [0.0, 1.0, 0.0, 1.0],
+                    &format!("V4L2 Active: {}", self.v4l2_device_path),
+                );
             }
         }
     }

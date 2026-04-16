@@ -419,7 +419,7 @@ impl OutputManager {
 
                 #[cfg(target_os = "linux")]
                 if let Some(ref mut v4l2) = self.v4l2_output {
-                    if let Err(e) = v4l2.send_frame(&data) {
+                    if let Err(e) = v4l2.send_frame(&data, width, height) {
                         log::error!("V4L2 output error: {}", e);
                     }
                 }

@@ -45,9 +45,17 @@ pub struct ControlGui {
     #[cfg(target_os = "windows")]
     spout_output_name: String,
 
-    // V4L2 device path (Linux)
+    // V4L2 devices (Linux)
     #[cfg(target_os = "linux")]
-    v4l2_device_path: String,
+    pub(super) v4l2_capture_devices: Vec<crate::v4l2_devices::V4l2DeviceInfo>,
+    #[cfg(target_os = "linux")]
+    pub(super) v4l2_output_devices: Vec<crate::v4l2_devices::V4l2DeviceInfo>,
+    #[cfg(target_os = "linux")]
+    pub(super) selected_v4l2_capture: usize,
+    #[cfg(target_os = "linux")]
+    pub(super) selected_v4l2_output: usize,
+    #[cfg(target_os = "linux")]
+    pub(super) v4l2_device_path: String,
 
     // Preview texture IDs
     pub input_preview_texture_id: Option<imgui::TextureId>,
@@ -116,6 +124,14 @@ impl ControlGui {
             #[cfg(target_os = "windows")]
             spout_output_name: "RustJay".to_string(),
             #[cfg(target_os = "linux")]
+            v4l2_capture_devices: Vec::new(),
+            #[cfg(target_os = "linux")]
+            v4l2_output_devices: Vec::new(),
+            #[cfg(target_os = "linux")]
+            selected_v4l2_capture: 0,
+            #[cfg(target_os = "linux")]
+            selected_v4l2_output: 0,
+            #[cfg(target_os = "linux")]
             v4l2_device_path: "/dev/video10".to_string(),
             input_preview_texture_id: None,
             output_preview_texture_id: None,
@@ -161,6 +177,26 @@ impl ControlGui {
         #[cfg(target_os = "windows")]
         {
             self.spout_senders = input_manager.spout_senders().to_vec();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.v4l2_capture_devices = input_manager.v4l2_capture_devices().to_vec();
+            self.v4l2_output_devices = input_manager.v4l2_output_devices().to_vec();
+            // If the current v4l2_device_path matches a discovered output device,
+            // align the combo selection with it.
+            if let Some(pos) = self
+                .v4l2_output_devices
+                .iter()
+                .position(|d| d.path == self.v4l2_device_path)
+            {
+                self.selected_v4l2_output = pos;
+            } else if !self.v4l2_output_devices.is_empty() {
+                self.selected_v4l2_output = 0;
+                self.v4l2_device_path = self.v4l2_output_devices[0].path.clone();
+            }
+            if self.selected_v4l2_capture >= self.v4l2_capture_devices.len() {
+                self.selected_v4l2_capture = 0;
+            }
         }
 
         // Audio device list is fast — refresh synchronously alongside the others
