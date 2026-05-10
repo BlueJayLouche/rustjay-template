@@ -179,15 +179,9 @@ cd rustjay-template
 cargo build --release
 ```
 
-### NDI Support (Optional)
+### NDI Support
 
-NDI is not included in the default build. To enable NDI input/output:
-
-```bash
-cargo build --release --features ndi
-```
-
-You will also need the NDI SDK installed:
+NDI is included in the default build. You will need the NDI SDK installed:
 1. Download NDI SDK for your platform from [NDI.tv](https://ndi.tv)
 2. On macOS, the build system will automatically find it in `/usr/local/lib` or `/Library/NDI SDK for Apple/lib/macOS`
 3. On Windows, LLVM must also be installed (NDI's build script uses `bindgen`)
@@ -313,6 +307,7 @@ cargo run --release
 | `1-5` | Switch input source (1=Test Pattern, 2=Webcam, 3=NDI, 4=Syphon, 5=Spout) |
 | `T` | Toggle test pattern |
 | `A` | Toggle audio visualization |
+| `Shift+T` | Tap tempo |
 | `Shift+F1-F8` | Load quick preset slot 1-8 |
 | `F1-F8` | Save to quick preset slot 1-8 |
 
