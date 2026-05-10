@@ -198,10 +198,9 @@ impl AudioRoute {
 }
 
 /// Manages all audio-to-parameter routings
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingMatrix {
     routes: Vec<AudioRoute>,
-    #[serde(skip)]
     next_id: usize,
     max_routes: usize,
 }

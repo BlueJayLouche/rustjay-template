@@ -2,7 +2,8 @@
 //!
 //! Save and load parameter snapshots with quick preset selector.
 
-use crate::core::{HsbParams, SharedState};
+use crate::audio::routing::RoutingMatrix;
+use crate::core::{HsbParams, LfoBank, SharedState};
 use serde::{Deserialize, Serialize};
 
 fn default_fft_size() -> usize {
@@ -50,6 +51,16 @@ pub struct Preset {
     pub internal_width: u32,
     pub internal_height: u32,
     
+    // LFO settings
+    #[serde(default)]
+    pub lfo_bank: LfoBank,
+
+    // Audio routing settings
+    #[serde(default)]
+    pub routing_matrix: RoutingMatrix,
+    #[serde(default)]
+    pub audio_routing_enabled: bool,
+
     // Custom parameters (for extensibility)
     #[serde(default)]
     pub custom_values: HashMap<String, f32>,
@@ -65,7 +76,11 @@ impl Preset {
                 .unwrap_or_default()
                 .as_secs(),
             description: String::new(),
-            hsb_params: state.hsb_params,
+            hsb_params: HsbParams {
+                hue_shift: state.audio_routing.base_hue,
+                saturation: state.audio_routing.base_saturation,
+                brightness: state.audio_routing.base_brightness,
+            },
             color_enabled: state.color_enabled,
             audio_amplitude: state.audio.amplitude,
             audio_smoothing: state.audio.smoothing,
@@ -74,6 +89,9 @@ impl Preset {
             audio_fft_size: state.audio.fft_size,
             internal_width: state.resolution.internal_width,
             internal_height: state.resolution.internal_height,
+            lfo_bank: state.lfo.bank.clone(),
+            routing_matrix: state.audio_routing.matrix.clone(),
+            audio_routing_enabled: state.audio_routing.enabled,
             custom_values: HashMap::new(),
         }
     }
@@ -81,6 +99,11 @@ impl Preset {
     /// Apply this preset to the shared state
     pub fn apply_to_state(&self, state: &mut SharedState) {
         state.hsb_params = self.hsb_params;
+        state.audio_routing.update_base_values(
+            self.hsb_params.hue_shift,
+            self.hsb_params.saturation,
+            self.hsb_params.brightness,
+        );
         state.color_enabled = self.color_enabled;
         state.audio.amplitude = self.audio_amplitude;
         state.audio.smoothing = self.audio_smoothing;
@@ -89,6 +112,9 @@ impl Preset {
         state.audio.fft_size = self.audio_fft_size;
         state.resolution.internal_width = self.internal_width;
         state.resolution.internal_height = self.internal_height;
+        state.lfo.bank = self.lfo_bank.clone();
+        state.audio_routing.matrix = self.routing_matrix.clone();
+        state.audio_routing.enabled = self.audio_routing_enabled;
     }
     
     /// Save preset to file
@@ -143,7 +169,9 @@ impl PresetBank {
         };
         
         // Try to load existing presets
-        let _ = bank.refresh();
+        if let Err(e) = bank.refresh() {
+            log::warn!("[PresetBank] Failed to refresh presets: {}", e);
+        }
         
         bank
     }

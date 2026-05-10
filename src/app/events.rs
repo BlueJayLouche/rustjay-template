@@ -294,6 +294,28 @@ impl ApplicationHandler for App {
                         self.save_settings();
                         event_loop.exit();
                     }
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        // Track shift key
+                        if let winit::keyboard::Key::Named(winit::keyboard::NamedKey::Shift) = &event.logical_key {
+                            self.shift_pressed = event.state == winit::event::ElementState::Pressed;
+                        }
+
+                        if event.state == winit::event::ElementState::Pressed {
+                            match &event.logical_key {
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                                    self.save_settings();
+                                    event_loop.exit();
+                                }
+                                winit::keyboard::Key::Character(ch) => {
+                                    let key = ch.to_lowercase();
+                                    if self.shift_pressed && key == "t" {
+                                        self.trigger_tap_tempo();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     WindowEvent::Resized(size) => {
                         if let Some(ref mut renderer) = self.imgui_renderer {
                             renderer.resize(size.width, size.height);

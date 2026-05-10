@@ -108,7 +108,7 @@ codegen-units = 1
 panic = "abort"
 
 [features]
-default = ["webcam"]
+default = ["webcam", "ndi"]
 webcam = ["nokhwa"]
 ndi = ["grafton-ndi"]
 spout = []   # Windows Spout support (dep is in [target.windows.dependencies])
