@@ -6,29 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- **Engine**: Split `renderer.rs` (620 lines) into focused modules:
-  - `engine/pipeline.rs` — HSB render pipeline and bind group layout setup
-  - `engine/uniforms.rs` — `HsbUniforms` GPU type
-  - `engine/blit.rs` — `BlitPipeline` for screen blit (cached at startup)
-- **Audio**: Split `audio/mod.rs` (598 lines) into focused modules:
-  - `audio/fft.rs` — lock-free `AudioOutput`/`AudioConfig` types and real-time FFT processing
-  - `audio/device.rs` — device enumeration and stream construction per sample format
-- **Core**: Moved command enums (`InputCommand`, `AudioCommand`, `OutputCommand`,
-  `MidiCommand`, `OscCommand`, `PresetCommand`, `WebControlCommand`) out of `SharedState`
-  into their respective subsystem modules. Re-exported from `crate::core` for backward
-  compatibility — no call-site changes required.
-- **App**: Added `dispatch_commands()` aggregator replacing 7 individual calls in the event
-  loop. Introduced `lock()` helper to reduce mutex boilerplate in `commands.rs`.
-
-### Fixed
-
-- **Performance**: `blit_to_surface` previously recreated its shader, pipeline, and bind
-  group layout on every frame. `BlitPipeline` now caches these at init — zero GPU object
-  allocation per frame for the blit pass.
-
-## [0.2.0] - 2026-03-14
+## [0.2.0] - 2026-05-10
 
 ### Added
 
@@ -59,6 +37,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Named preset save/load/delete
 - Import/export functionality
 - Persistent storage in ~/.config/rustjay/
+- Presets now include LFO bank and audio routing matrix
 
 #### Settings Persistence
 - Auto-save to ~/.config/rustjay/settings.json
@@ -77,12 +56,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Fixed waveform change race condition
 - Suppressed winit/tracing debug spam
 - Fixed web server binding with localhost fallback
+- Fixed preset save/load reading from wrong HSB source (`audio_routing.base_*`)
+- Fixed `RoutingMatrix` `next_id` serialization bug
 
 ### Changed
 
 - **Architecture**: Modulation now applied at render time, not update time
 - **GUI**: Sliders now display base values (unaffected by modulation)
 - **Data Flow**: Base values stored separately, modulations are additive offsets
+- **Engine**: Split `renderer.rs` (620 lines) into focused modules:
+  - `engine/pipeline.rs` — HSB render pipeline and bind group layout setup
+  - `engine/uniforms.rs` — `HsbUniforms` GPU type
+  - `engine/blit.rs` — `BlitPipeline` for screen blit (cached at startup)
+- **Audio**: Split `audio/mod.rs` (598 lines) into focused modules:
+  - `audio/fft.rs` — lock-free `AudioOutput`/`AudioConfig` types and real-time FFT processing
+  - `audio/device.rs` — device enumeration and stream construction per sample format
+- **Core**: Moved command enums out of `SharedState` into respective subsystem modules
+- **App**: Added `dispatch_commands()` aggregator replacing 7 individual calls in the event loop
+- **NDI**: Added to default Cargo features
+- **GUI**: Added `Shift+T` tap tempo shortcut to control window
 
 ### Documentation
 
